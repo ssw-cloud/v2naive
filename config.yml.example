@@ -1,0 +1,10 @@
+Log:
+  Level: info
+  Output: /var/log/v2naive/v2naive.log
+
+Nodes:
+  - ApiHost: "https://your-panel.example.com"
+    NodeID: 1
+    ApiKey: "your-server-token"
+    Timeout: 15
+    RetryCount: 2

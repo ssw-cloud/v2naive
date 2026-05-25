@@ -1,0 +1,14 @@
+[Unit]
+Description=v2naive service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/v2naive
+ExecStart=/opt/v2naive/v2naive -config /etc/v2naive/config.yml
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
