@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/ssw-cloud/v2naive.git}"
 REPO_BRANCH="${REPO_BRANCH:-main}"
+REPO_SLUG="${REPO_SLUG:-ssw-cloud/v2naive}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/v2naive}"
 SRC_DIR="${SRC_DIR:-${INSTALL_DIR}/src}"
 BIN_PATH="${BIN_PATH:-${INSTALL_DIR}/v2naive}"
@@ -11,9 +12,11 @@ CONFIG_PATH="${CONFIG_PATH:-${CONFIG_DIR}/config.yml}"
 SERVICE_NAME="${SERVICE_NAME:-v2naive}"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 LOG_DIR="${LOG_DIR:-/var/log/v2naive}"
+RELEASE_VERSION="${RELEASE_VERSION:-latest}"
 GO_VERSION="${GO_VERSION:-1.25.6}"
 MIN_GO_VERSION="${MIN_GO_VERSION:-1.24.0}"
 GO_BIN=""
+BUILD_FROM_SOURCE=0
 
 API_HOST=""
 NODE_ID=""
@@ -25,6 +28,8 @@ Usage:
   bash install.sh --api-host https://panel.example.com --node-id 1 --api-key your-token
 
 Optional flags:
+  --version TAG
+  --build-from-source
   --repo-url URL
   --repo-branch BRANCH
   --install-dir PATH
@@ -71,6 +76,14 @@ parse_args() {
       --repo-url)
         REPO_URL="${2:-}"
         shift 2
+        ;;
+      --version)
+        RELEASE_VERSION="${2:-}"
+        shift 2
+        ;;
+      --build-from-source)
+        BUILD_FROM_SOURCE=1
+        shift 1
         ;;
       --repo-branch)
         REPO_BRANCH="${2:-}"
@@ -149,6 +162,39 @@ normalize_arch() {
   esac
 }
 
+release_url() {
+  local asset_name="$1"
+  if [[ "$RELEASE_VERSION" == "latest" ]]; then
+    echo "https://github.com/${REPO_SLUG}/releases/latest/download/${asset_name}"
+    return
+  fi
+  echo "https://github.com/${REPO_SLUG}/releases/download/${RELEASE_VERSION}/${asset_name}"
+}
+
+download_release_binary() {
+  local arch
+  arch="$(normalize_arch)"
+  local asset_name="v2naive_linux_${arch}.tar.gz"
+  local url
+  url="$(release_url "$asset_name")"
+  local workdir
+  workdir="$(mktemp -d /tmp/v2naive-release.XXXXXX)"
+  local archive="${workdir}/${asset_name}"
+
+  log "downloading release package ${asset_name}"
+  if ! curl -fL --connect-timeout 15 --retry 3 "$url" -o "$archive"; then
+    rm -rf "$workdir"
+    return 1
+  fi
+
+  tar -xzf "$archive" -C "$workdir"
+  [[ -f "${workdir}/v2naive" ]] || fail "release archive missing v2naive binary"
+
+  mkdir -p "$INSTALL_DIR"
+  install -m 0755 "${workdir}/v2naive" "$BIN_PATH"
+  rm -rf "$workdir"
+}
+
 ensure_go() {
   local current=""
   if command -v go >/dev/null 2>&1; then
@@ -200,6 +246,20 @@ build_binary() {
     "$GO_BIN" build -o "$BIN_PATH" .
   )
   chmod 0755 "$BIN_PATH"
+}
+
+install_binary() {
+  if [[ "$BUILD_FROM_SOURCE" -eq 0 ]] && download_release_binary; then
+    log "installed from GitHub release"
+    return
+  fi
+
+  if [[ "$BUILD_FROM_SOURCE" -eq 0 ]]; then
+    log "release package not available, falling back to source build"
+  fi
+  ensure_go
+  sync_repo
+  build_binary
 }
 
 write_config() {
@@ -255,9 +315,7 @@ main() {
   parse_args "$@"
   ensure_root
   install_packages
-  ensure_go
-  sync_repo
-  build_binary
+  install_binary
   write_config
   write_service
   start_service

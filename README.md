@@ -62,4 +62,26 @@ bash <(curl -fsSL https://raw.githubusercontent.com/ssw-cloud/v2naive/main/scrip
   --api-key "your-server-token"
 ```
 
+默认会优先下载 GitHub Release 里的 Linux 二进制包，只有在找不到对应 release 时才会回退到源码编译。
+
+如果要指定版本：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/ssw-cloud/v2naive/main/script/install.sh) \
+  --version "v0.1.0" \
+  --api-host "https://your-panel.example.com" \
+  --node-id 1 \
+  --api-key "your-server-token"
+```
+
+如果你明确要强制源码编译：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/ssw-cloud/v2naive/main/script/install.sh) \
+  --build-from-source \
+  --api-host "https://your-panel.example.com" \
+  --node-id 1 \
+  --api-key "your-server-token"
+```
+
 systemd 模板见 [deploy/v2naive.service](deploy/v2naive.service)。

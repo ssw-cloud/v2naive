@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - amd64
+          - arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.6"
+
+      - name: Build Archive
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: 0
+        run: |
+          mkdir -p "dist/${GOARCH}"
+          go build -trimpath -ldflags="-s -w" -o "dist/${GOARCH}/v2naive" .
+          cp README.md config.yml.example "dist/${GOARCH}/"
+          mkdir -p "dist/${GOARCH}/deploy"
+          cp deploy/v2naive.service "dist/${GOARCH}/deploy/"
+          tar -C "dist/${GOARCH}" -czf "dist/v2naive_linux_${GOARCH}.tar.gz" .
+
+      - name: Upload Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2naive-linux-${{ matrix.arch }}
+          path: dist/v2naive_linux_${{ matrix.arch }}.tar.gz
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: v2naive-linux-*
+          merge-multiple: true
+
+      - name: Generate Checksums
+        run: |
+          cd dist
+          sha256sum v2naive_linux_*.tar.gz > checksums.txt
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/v2naive_linux_amd64.tar.gz
+            dist/v2naive_linux_arm64.tar.gz
+            dist/checksums.txt
