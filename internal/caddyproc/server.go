@@ -1141,14 +1141,18 @@ type tunnelEvent struct {
 
 const eventPrefix = "V2NAIVE_EVENT "
 
+type caddyLogLine struct {
+	Message string `json:"msg"`
+}
+
 func (s *Server) consumeOutput(reader io.Reader, stderr bool) {
 	scanner := bufio.NewScanner(reader)
 	buf := make([]byte, 0, 128*1024)
 	scanner.Buffer(buf, 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if idx := strings.Index(line, eventPrefix); idx >= 0 {
-			s.handleEventLine(line[idx+len(eventPrefix):])
+		if raw, ok := extractEventPayload(line); ok {
+			s.handleEventLine(raw)
 			continue
 		}
 		entry := log.WithField("node_id", s.node.Id)
@@ -1164,6 +1168,23 @@ func (s *Server) consumeOutput(reader io.Reader, stderr bool) {
 			"err":     err,
 		}).Error("read caddy output failed")
 	}
+}
+
+func extractEventPayload(line string) (string, bool) {
+	var caddyLog caddyLogLine
+	if err := json.Unmarshal([]byte(line), &caddyLog); err == nil {
+		if raw, ok := trimEventPrefix(caddyLog.Message); ok {
+			return raw, true
+		}
+	}
+	return trimEventPrefix(line)
+}
+
+func trimEventPrefix(text string) (string, bool) {
+	if idx := strings.Index(text, eventPrefix); idx >= 0 {
+		return strings.TrimSpace(text[idx+len(eventPrefix):]), true
+	}
+	return "", false
 }
 
 func (s *Server) handleEventLine(raw string) {

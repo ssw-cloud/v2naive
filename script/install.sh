@@ -13,6 +13,7 @@ CONFIG_PATH="${CONFIG_PATH:-${CONFIG_DIR}/config.yml}"
 SERVICE_NAME="${SERVICE_NAME:-v2naive}"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 LOG_DIR="${LOG_DIR:-/var/log/v2naive}"
+LOGROTATE_PATH="/etc/logrotate.d/${SERVICE_NAME}"
 STATE_DIR="${STATE_DIR:-/var/lib/v2naive}"
 RELEASE_VERSION="${RELEASE_VERSION:-latest}"
 GO_VERSION="${GO_VERSION:-1.25.6}"
@@ -379,6 +380,21 @@ WantedBy=multi-user.target
 EOF
 }
 
+write_logrotate() {
+  cat >"$LOGROTATE_PATH" <<EOF
+${LOG_DIR}/*.log {
+  daily
+  rotate 14
+  size 50M
+  missingok
+  notifempty
+  compress
+  delaycompress
+  copytruncate
+}
+EOF
+}
+
 start_service() {
   need_cmd systemctl
   systemctl daemon-reload
@@ -396,6 +412,7 @@ main() {
   install_caddy
   write_config
   write_service
+  write_logrotate
   start_service
   log "installed successfully"
   log "config: ${CONFIG_PATH}"

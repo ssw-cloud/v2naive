@@ -187,6 +187,34 @@ func TestConsumeOutputParsesEmbeddedEventPrefix(t *testing.T) {
 	}
 }
 
+func TestConsumeOutputParsesStructuredCaddyJSONEvent(t *testing.T) {
+	server := New(&panel.NodeInfo{
+		Id:         9,
+		ServerPort: 443,
+		CertInfo: &panel.CertInfo{
+			CertFile: "/tmp/cert.pem",
+			KeyFile:  "/tmp/key.pem",
+		},
+	}, []panel.UserInfo{
+		{Id: 12, Uuid: "user-5"},
+	}, nil, conf.RuntimeConfig{
+		CaddyPath:     "/opt/v2naive/caddy",
+		WorkingDir:    "/var/lib/v2naive",
+		AdminPortBase: 22019,
+	})
+
+	stream := strings.NewReader(`{"level":"info","ts":1780000000.0,"logger":"http.handlers.forward_proxy","msg":"V2NAIVE_EVENT {\"type\":\"close\",\"user\":\"user-5\",\"ip\":\"4.3.2.1\",\"target\":\"example.com:443\",\"upload\":333,\"download\":444}"}` + "\n")
+	server.consumeOutput(stream, false)
+
+	traffic := server.GetUserTrafficSlice(0)
+	if len(traffic) != 1 {
+		t.Fatalf("expected one traffic report, got %+v", traffic)
+	}
+	if traffic[0].UID != 12 || traffic[0].Upload != 333 || traffic[0].Download != 444 {
+		t.Fatalf("unexpected traffic snapshot: %+v", traffic[0])
+	}
+}
+
 func TestAuthorizeRejectsWhenDeviceLimitReached(t *testing.T) {
 	server := New(&panel.NodeInfo{
 		Id:         7,
