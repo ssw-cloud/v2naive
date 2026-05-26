@@ -277,7 +277,7 @@ func (s *Server) renderConfig() []byte {
 
 	buf.WriteString("{\n")
 	buf.WriteString("  admin " + s.adminAddr + "\n")
-	buf.WriteString("  auto_https disable_redirects\n")
+	buf.WriteString("  auto_https off\n")
 	buf.WriteString("  order forward_proxy first\n")
 	buf.WriteString("}\n\n")
 

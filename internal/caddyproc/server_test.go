@@ -39,6 +39,7 @@ func TestRenderConfigIncludesNaiveForwardProxyShape(t *testing.T) {
 	text := string(server.renderConfig())
 	for _, needle := range []string{
 		"admin 127.0.0.1:22022",
+		"auto_https off",
 		"order forward_proxy first",
 		":443, us.sswnat.com, naive.example.com {",
 		"bind 0.0.0.0",
