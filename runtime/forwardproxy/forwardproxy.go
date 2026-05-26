@@ -251,6 +251,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 		reqHost = r.Host // OK; probably just didn't have a port
 	}
 
+	if r.Method != http.MethodConnect && !r.URL.IsAbs() {
+		if h.shouldServePACFile(r) {
+			return h.servePacFile(w, r)
+		}
+		return next.ServeHTTP(w, r)
+	}
+
 	var authErr error
 	if h.AuthCredentials != nil {
 		authErr = h.checkCredentials(r)
