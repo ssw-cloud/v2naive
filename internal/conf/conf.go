@@ -3,6 +3,7 @@ package conf
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -11,8 +12,9 @@ const DefaultNodeRetryCount = 1
 const DefaultNodeTimeout = 15
 
 type Conf struct {
-	LogConfig   LogConfig    `mapstructure:"Log"`
-	NodeConfigs []NodeConfig `mapstructure:"Nodes"`
+	LogConfig     LogConfig     `mapstructure:"Log"`
+	RuntimeConfig RuntimeConfig `mapstructure:"Runtime"`
+	NodeConfigs   []NodeConfig  `mapstructure:"Nodes"`
 }
 
 type LogConfig struct {
@@ -28,10 +30,28 @@ type NodeConfig struct {
 	RetryCount *int   `mapstructure:"RetryCount"`
 }
 
+const (
+	EngineLegacy = "legacy"
+	EngineCaddy  = "caddy"
+)
+
+type RuntimeConfig struct {
+	Engine        string `mapstructure:"Engine"`
+	CaddyPath     string `mapstructure:"CaddyPath"`
+	WorkingDir    string `mapstructure:"WorkingDir"`
+	AdminPortBase int    `mapstructure:"AdminPortBase"`
+}
+
 func New() *Conf {
 	return &Conf{
 		LogConfig: LogConfig{
 			Level: "info",
+		},
+		RuntimeConfig: RuntimeConfig{
+			Engine:        EngineLegacy,
+			CaddyPath:     "/opt/v2naive/caddy",
+			WorkingDir:    "/var/lib/v2naive",
+			AdminPortBase: 22019,
 		},
 	}
 }
@@ -56,9 +76,33 @@ func (c *Conf) LoadFromPath(filePath string) error {
 			c.NodeConfigs[i].RetryCount = intPtr(DefaultNodeRetryCount)
 		}
 	}
+	c.RuntimeConfig.normalize()
 	return nil
 }
 
 func intPtr(v int) *int {
 	return &v
+}
+
+func (c RuntimeConfig) EngineName() string {
+	engine := strings.TrimSpace(strings.ToLower(c.Engine))
+	if engine == "" {
+		return EngineLegacy
+	}
+	return engine
+}
+
+func (c *RuntimeConfig) normalize() {
+	if c.Engine == "" {
+		c.Engine = EngineLegacy
+	}
+	if c.CaddyPath == "" {
+		c.CaddyPath = "/opt/v2naive/caddy"
+	}
+	if c.WorkingDir == "" {
+		c.WorkingDir = "/var/lib/v2naive"
+	}
+	if c.AdminPortBase == 0 {
+		c.AdminPortBase = 22019
+	}
 }

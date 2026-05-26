@@ -1,0 +1,25 @@
+package forwardproxy
+
+import (
+	"encoding/json"
+	"log"
+)
+
+const v2naiveEventPrefix = "V2NAIVE_EVENT "
+
+type v2naiveTunnelEvent struct {
+	Type     string `json:"type"`
+	User     string `json:"user"`
+	IP       string `json:"ip"`
+	Target   string `json:"target,omitempty"`
+	Upload   int64  `json:"upload,omitempty"`
+	Download int64  `json:"download,omitempty"`
+}
+
+func emitV2naiveEvent(event v2naiveTunnelEvent) {
+	body, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+	log.Print(v2naiveEventPrefix + string(body))
+}

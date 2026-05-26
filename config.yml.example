@@ -2,6 +2,12 @@ Log:
   Level: info
   Output: /var/log/v2naive/v2naive.log
 
+Runtime:
+  Engine: caddy
+  CaddyPath: /opt/v2naive/caddy
+  WorkingDir: /var/lib/v2naive
+  AdminPortBase: 22019
+
 Nodes:
   - ApiHost: "https://your-panel.example.com"
     NodeID: 1

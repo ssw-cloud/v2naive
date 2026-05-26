@@ -7,16 +7,19 @@ REPO_SLUG="${REPO_SLUG:-ssw-cloud/v2naive}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/v2naive}"
 SRC_DIR="${SRC_DIR:-${INSTALL_DIR}/src}"
 BIN_PATH="${BIN_PATH:-${INSTALL_DIR}/v2naive}"
+CADDY_BIN_PATH="${CADDY_BIN_PATH:-${INSTALL_DIR}/caddy}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/v2naive}"
 CONFIG_PATH="${CONFIG_PATH:-${CONFIG_DIR}/config.yml}"
 SERVICE_NAME="${SERVICE_NAME:-v2naive}"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 LOG_DIR="${LOG_DIR:-/var/log/v2naive}"
+STATE_DIR="${STATE_DIR:-/var/lib/v2naive}"
 RELEASE_VERSION="${RELEASE_VERSION:-latest}"
 GO_VERSION="${GO_VERSION:-1.25.6}"
 MIN_GO_VERSION="${MIN_GO_VERSION:-1.24.0}"
 GO_BIN=""
 BUILD_FROM_SOURCE=0
+ENGINE="${ENGINE:-caddy}"
 
 API_HOST=""
 NODE_ID=""
@@ -29,6 +32,7 @@ Usage:
 
 Optional flags:
   --version TAG
+  --engine caddy|legacy
   --build-from-source
   --repo-url URL
   --repo-branch BRANCH
@@ -85,6 +89,10 @@ parse_args() {
         BUILD_FROM_SOURCE=1
         shift 1
         ;;
+      --engine)
+        ENGINE="${2:-}"
+        shift 2
+        ;;
       --repo-branch)
         REPO_BRANCH="${2:-}"
         shift 2
@@ -93,6 +101,7 @@ parse_args() {
         INSTALL_DIR="${2:-}"
         SRC_DIR="${INSTALL_DIR}/src"
         BIN_PATH="${INSTALL_DIR}/v2naive"
+        CADDY_BIN_PATH="${INSTALL_DIR}/caddy"
         shift 2
         ;;
       --config-path)
@@ -122,6 +131,13 @@ parse_args() {
   [[ -n "$API_HOST" ]] || fail "--api-host is required"
   [[ -n "$NODE_ID" ]] || fail "--node-id is required"
   [[ -n "$API_KEY" ]] || fail "--api-key is required"
+  case "$ENGINE" in
+    caddy|legacy)
+      ;;
+    *)
+      fail "--engine must be caddy or legacy"
+      ;;
+  esac
 }
 
 ensure_root() {
@@ -134,15 +150,15 @@ install_packages() {
   if command -v apt-get >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y curl git tar ca-certificates
+    apt-get install -y curl git tar xz-utils ca-certificates
     return
   fi
   if command -v dnf >/dev/null 2>&1; then
-    dnf install -y curl git tar ca-certificates
+    dnf install -y curl git tar xz ca-certificates
     return
   fi
   if command -v yum >/dev/null 2>&1; then
-    yum install -y curl git tar ca-certificates
+    yum install -y curl git tar xz ca-certificates
     return
   fi
   fail "unsupported package manager"
@@ -169,6 +185,29 @@ release_url() {
     return
   fi
   echo "https://github.com/${REPO_SLUG}/releases/download/${RELEASE_VERSION}/${asset_name}"
+}
+
+download_patched_caddy_release() {
+  local arch
+  arch="$(normalize_arch)"
+  local asset_name="v2naive_caddy_linux_${arch}.tar.gz"
+  local url
+  url="$(release_url "$asset_name")"
+  local workdir
+  workdir="$(mktemp -d /tmp/v2naive-caddy-release.XXXXXX)"
+  local archive="${workdir}/${asset_name}"
+
+  log "downloading patched naive caddy package ${asset_name}"
+  if ! curl -fL --connect-timeout 15 --retry 3 "$url" -o "$archive"; then
+    rm -rf "$workdir"
+    return 1
+  fi
+
+  tar -xzf "$archive" -C "$workdir"
+  [[ -f "${workdir}/caddy" ]] || fail "release archive missing caddy binary"
+  mkdir -p "$INSTALL_DIR"
+  install -m 0755 "${workdir}/caddy" "$CADDY_BIN_PATH"
+  rm -rf "$workdir"
 }
 
 download_release_binary() {
@@ -248,6 +287,37 @@ build_binary() {
   chmod 0755 "$BIN_PATH"
 }
 
+build_naive_caddy() {
+  ensure_go
+  local gopath
+  gopath="$("$GO_BIN" env GOPATH)"
+  [[ -d "${SRC_DIR}/runtime/forwardproxy" ]] || fail "missing local forwardproxy runtime sources"
+  log "building naive caddy runtime from source"
+  "$GO_BIN" install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+  mkdir -p "$INSTALL_DIR"
+  (
+    cd "$INSTALL_DIR"
+    "${gopath}/bin/xcaddy" build \
+      --output "$CADDY_BIN_PATH" \
+      --with github.com/caddyserver/forwardproxy="${SRC_DIR}/runtime/forwardproxy"
+  )
+  chmod 0755 "$CADDY_BIN_PATH"
+}
+
+install_caddy() {
+  if [[ "$ENGINE" != "caddy" ]]; then
+    return
+  fi
+  if [[ "$BUILD_FROM_SOURCE" -eq 0 ]] && download_patched_caddy_release; then
+    log "installed patched naive caddy from GitHub release"
+    return
+  fi
+  if [[ "$BUILD_FROM_SOURCE" -eq 0 ]]; then
+    log "patched naive caddy release not available, falling back to source build"
+  fi
+  build_naive_caddy
+}
+
 install_binary() {
   if [[ "$BUILD_FROM_SOURCE" -eq 0 ]] && download_release_binary; then
     log "installed from GitHub release"
@@ -263,7 +333,7 @@ install_binary() {
 }
 
 write_config() {
-  mkdir -p "$CONFIG_DIR" "$LOG_DIR"
+  mkdir -p "$CONFIG_DIR" "$LOG_DIR" "$STATE_DIR"
   touch "${LOG_DIR}/v2naive.log"
 
   if [[ -f "$CONFIG_PATH" ]]; then
@@ -274,6 +344,12 @@ write_config() {
 Log:
   Level: info
   Output: ${LOG_DIR}/v2naive.log
+
+Runtime:
+  Engine: ${ENGINE}
+  CaddyPath: ${CADDY_BIN_PATH}
+  WorkingDir: ${STATE_DIR}
+  AdminPortBase: 22019
 
 Nodes:
   - ApiHost: "${API_HOST}"
@@ -316,6 +392,8 @@ main() {
   ensure_root
   install_packages
   install_binary
+  sync_repo
+  install_caddy
   write_config
   write_service
   start_service

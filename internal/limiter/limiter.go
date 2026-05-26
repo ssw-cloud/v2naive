@@ -115,38 +115,10 @@ func (l *Limiter) updateBucket(uuid string, speedLimit int) {
 
 func (l *Limiter) CheckLimit(uuid, ip string) (*ratelimit.Bucket, bool) {
 	ip = strings.TrimPrefix(ip, "::ffff:")
-	infoValue, ok := l.UserLimitInfo.Load(uuid)
-	if !ok {
+	speedLimit, reject := l.Authorize(uuid, ip)
+	if reject {
 		return nil, true
 	}
-	info := infoValue.(*UserLimitInfo)
-	deviceLimit := info.DeviceLimit
-	aliveIP := l.aliveCount(info.UID)
-
-	ipMap := new(sync.Map)
-	ipMap.Store(ip, info.UID)
-	if value, loaded := l.UserOnlineIP.LoadOrStore(uuid, ipMap); loaded {
-		oldMap := value.(*sync.Map)
-		if _, seen := oldMap.LoadOrStore(ip, info.UID); !seen {
-			if cachedUID, existed := l.OldUserOnline.Load(ip); existed {
-				if cachedUID.(int) == info.UID {
-					l.OldUserOnline.Delete(ip)
-				}
-			} else if deviceLimit > 0 && deviceLimit <= aliveIP {
-				oldMap.Delete(ip)
-				return nil, true
-			}
-		}
-	} else if cachedUID, existed := l.OldUserOnline.Load(ip); existed {
-		if cachedUID.(int) == info.UID {
-			l.OldUserOnline.Delete(ip)
-		}
-	} else if deviceLimit > 0 && deviceLimit <= aliveIP {
-		l.UserOnlineIP.Delete(uuid)
-		return nil, true
-	}
-
-	speedLimit := determineSpeedLimit(l.NodeSpeedLimit, info.SpeedLimit)
 	if speedLimit <= 0 {
 		return nil, false
 	}
@@ -156,6 +128,41 @@ func (l *Limiter) CheckLimit(uuid, ip string) (*ratelimit.Bucket, bool) {
 	bucket := NewDynamicBucket(int64(speedLimit) * 1000000 / 8)
 	l.SpeedLimiter.Store(uuid, bucket)
 	return bucket.Get(), false
+}
+
+func (l *Limiter) Authorize(uuid, ip string) (int, bool) {
+	info, reject := l.admit(uuid, ip)
+	if reject {
+		return 0, true
+	}
+	return determineSpeedLimit(l.NodeSpeedLimit, info.SpeedLimit), false
+}
+
+func (l *Limiter) ReleaseIP(uuid, ip string) {
+	ip = strings.TrimPrefix(ip, "::ffff:")
+	value, ok := l.UserOnlineIP.Load(uuid)
+	if ok {
+		ipMap := value.(*sync.Map)
+		ipMap.Delete(ip)
+
+		empty := true
+		ipMap.Range(func(_, _ any) bool {
+			empty = false
+			return false
+		})
+		if empty {
+			l.UserOnlineIP.Delete(uuid)
+		}
+	}
+
+	if cachedUID, existed := l.OldUserOnline.Load(ip); existed {
+		if infoValue, ok := l.UserLimitInfo.Load(uuid); ok {
+			info := infoValue.(*UserLimitInfo)
+			if cachedUID.(int) == info.UID {
+				l.OldUserOnline.Delete(ip)
+			}
+		}
+	}
 }
 
 func (l *Limiter) GetOnlineDevice() []panel.OnlineUser {
@@ -191,6 +198,42 @@ func determineSpeedLimit(limit1, limit2 int) int {
 		return limit1
 	}
 	return limit1
+}
+
+func (l *Limiter) admit(uuid, ip string) (*UserLimitInfo, bool) {
+	ip = strings.TrimPrefix(ip, "::ffff:")
+	infoValue, ok := l.UserLimitInfo.Load(uuid)
+	if !ok {
+		return nil, true
+	}
+	info := infoValue.(*UserLimitInfo)
+	deviceLimit := info.DeviceLimit
+	aliveIP := l.aliveCount(info.UID)
+
+	ipMap := new(sync.Map)
+	ipMap.Store(ip, info.UID)
+	if value, loaded := l.UserOnlineIP.LoadOrStore(uuid, ipMap); loaded {
+		oldMap := value.(*sync.Map)
+		if _, seen := oldMap.LoadOrStore(ip, info.UID); !seen {
+			if cachedUID, existed := l.OldUserOnline.Load(ip); existed {
+				if cachedUID.(int) == info.UID {
+					l.OldUserOnline.Delete(ip)
+				}
+			} else if deviceLimit > 0 && deviceLimit <= aliveIP {
+				oldMap.Delete(ip)
+				return nil, true
+			}
+		}
+	} else if cachedUID, existed := l.OldUserOnline.Load(ip); existed {
+		if cachedUID.(int) == info.UID {
+			l.OldUserOnline.Delete(ip)
+		}
+	} else if deviceLimit > 0 && deviceLimit <= aliveIP {
+		l.UserOnlineIP.Delete(uuid)
+		return nil, true
+	}
+
+	return info, false
 }
 
 func (l *Limiter) aliveCount(uid int) int {

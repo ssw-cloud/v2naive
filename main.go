@@ -14,7 +14,7 @@ import (
 	"github.com/ssw-cloud/v2naive/internal/certutil"
 	"github.com/ssw-cloud/v2naive/internal/conf"
 	panel "github.com/ssw-cloud/v2naive/internal/panel"
-	"github.com/ssw-cloud/v2naive/internal/proxy"
+	"github.com/ssw-cloud/v2naive/internal/server"
 	"github.com/ssw-cloud/v2naive/internal/task"
 )
 
@@ -22,19 +22,21 @@ type Controller struct {
 	apiClient               *panel.Client
 	conf                    *conf.NodeConfig
 	info                    *panel.NodeInfo
-	server                  *proxy.Server
+	server                  server.Server
 	tag                     string
 	userList                []panel.UserInfo
 	reloadCh                chan struct{}
+	runtime                 conf.RuntimeConfig
 	nodeInfoMonitorPeriodic *task.Task
 	userReportPeriodic      *task.Task
 	renewCertPeriodic       *task.Task
 }
 
-func NewController(api *panel.Client, nodeConf *conf.NodeConfig, reloadCh chan struct{}) *Controller {
+func NewController(api *panel.Client, nodeConf *conf.NodeConfig, runtime conf.RuntimeConfig, reloadCh chan struct{}) *Controller {
 	return &Controller{
 		apiClient: api,
 		conf:      nodeConf,
+		runtime:   runtime,
 		reloadCh:  reloadCh,
 	}
 }
@@ -68,9 +70,16 @@ func (c *Controller) Start() error {
 	c.info = node
 	c.userList = users
 	c.tag = node.Tag
-	c.server = proxy.New(node, users, aliveMap)
+	runtimeServer, err := server.New(node, users, aliveMap, c.runtime)
+	if err != nil {
+		return fmt.Errorf("create runtime server error: %w", err)
+	}
+	c.server = runtimeServer
 	if err := c.server.Start(); err != nil {
 		return fmt.Errorf("start v2naive server error: %w", err)
+	}
+	if c.runtime.EngineName() == conf.EngineCaddy {
+		log.WithField("node_id", node.Id).Info("caddy runtime is active; protocol is served by patched forwardproxy@naive")
 	}
 	c.startTasks()
 	return nil
@@ -281,14 +290,14 @@ func main() {
 
 	for i := range cfg.NodeConfigs {
 		nodeCfg := cfg.NodeConfigs[i]
-		go runNode(ctx, &nodeCfg)
+		go runNode(ctx, &nodeCfg, cfg.RuntimeConfig)
 	}
 
 	<-ctx.Done()
 	log.Info("v2naive stopped")
 }
 
-func runNode(ctx context.Context, nodeCfg *conf.NodeConfig) {
+func runNode(ctx context.Context, nodeCfg *conf.NodeConfig, runtime conf.RuntimeConfig) {
 	reloadCh := make(chan struct{}, 1)
 	for {
 		select {
@@ -307,7 +316,7 @@ func runNode(ctx context.Context, nodeCfg *conf.NodeConfig) {
 			continue
 		}
 
-		controller := NewController(client, nodeCfg, reloadCh)
+		controller := NewController(client, nodeCfg, runtime, reloadCh)
 		if err := controller.Start(); err != nil {
 			log.WithFields(log.Fields{
 				"node_id": nodeCfg.NodeID,

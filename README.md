@@ -10,12 +10,18 @@
 当前实现重点：
 
 - `v2node` 节点类型下的 `protocol=naive`
-- TLS + HTTP/2 / HTTP/1.1 forward proxy
+- `Runtime.Engine=caddy` 时使用官方 `klzgrad/forwardproxy@naive` 运行真 naive 协议
+- `Runtime.Engine=legacy` 时保留旧的 TLS + HTTP/2 / HTTP/1.1 forward proxy，方便回滚
 - 用户热更新
-- 用户流量统计
-- 在线 IP 上报
 - 基础证书模式：`file` / `self` / `http` / `dns`
 - Basic Auth 用户名/密码都使用用户 `uuid`
+
+当前重构状态：
+
+- `caddy` 引擎优先解决“真 naive 协议兼容”
+- `legacy` 引擎仍然保留完整的旧计费链路
+- `caddy` 引擎已经能回传每条 naive 隧道的用户/IP/上下行字节，并通过本地鉴权口做设备数限制
+- `caddy` 引擎的下一段重点还剩速率限制的实战压测和更细的异常恢复
 
 面板侧约定：
 
@@ -30,6 +36,12 @@
 Log:
   Level: info
   Output: /var/log/v2naive/v2naive.log
+
+Runtime:
+  Engine: caddy
+  CaddyPath: /opt/v2naive/caddy
+  WorkingDir: /var/lib/v2naive
+  AdminPortBase: 22019
 
 Nodes:
   - ApiHost: "https://your-panel.example.com"
@@ -63,6 +75,13 @@ bash <(curl -fsSL https://raw.githubusercontent.com/ssw-cloud/v2naive/main/scrip
 ```
 
 默认会优先下载 GitHub Release 里的 Linux 二进制包，只有在找不到对应 release 时才会回退到源码编译。
+
+当 `Engine=caddy` 时，安装脚本还会额外构建一个带本地统计补丁的 `forwardproxy@naive` 运行时：
+
+- 会优先下载 release 里的 `v2naive_caddy_linux_<arch>.tar.gz`
+- 没有对应 release 时，再自动同步本仓库源码
+- 然后用 `xcaddy` 从 [runtime/forwardproxy](/Users/raoziyang/CodexProjects/v2naive/runtime/forwardproxy/go.mod:1) 构建自定义 Caddy
+- 这样 `v2naive` 才能拿到每条 naive 隧道的用户/IP/上下行事件，继续对接 v2board 的流量与在线上报
 
 如果要指定版本：
 
