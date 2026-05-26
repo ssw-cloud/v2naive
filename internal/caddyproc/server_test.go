@@ -43,9 +43,12 @@ func TestRenderConfigIncludesNaiveForwardProxyShape(t *testing.T) {
 		"tls \"/etc/v2naive/fullchain.cer\" \"/etc/v2naive/cert.key\"",
 		"basic_auth \"user-a\" \"user-a\"",
 		"basic_auth \"user-b\" \"user-b\"",
+		"probe_resistance",
 		"hide_ip",
 		"hide_via",
 		"allow all",
+		"root * \"/var/lib/v2naive/node-3/cover\"",
+		"file_server",
 	} {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("expected config to contain %q, got:\n%s", needle, text)

@@ -81,6 +81,9 @@ func (s *Server) Start() error {
 	if err := os.MkdirAll(s.workDir, 0755); err != nil {
 		return fmt.Errorf("create work dir failed: %w", err)
 	}
+	if err := s.writeCoverSite(); err != nil {
+		return fmt.Errorf("write cover site failed: %w", err)
+	}
 	if err := os.WriteFile(s.configPath, s.renderConfig(), 0644); err != nil {
 		return fmt.Errorf("write caddyfile failed: %w", err)
 	}
@@ -182,6 +185,10 @@ func (s *Server) UpdateUsers(added, deleted, modified, full []panel.UserInfo) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.cmd == nil {
+		return
+	}
+	if err := s.writeCoverSite(); err != nil {
+		log.WithError(err).Error("write cover site failed")
 		return
 	}
 	if err := os.WriteFile(s.configPath, s.renderConfig(), 0644); err != nil {
@@ -291,16 +298,73 @@ func (s *Server) renderConfig() []byte {
 	for _, user := range users {
 		buf.WriteString("    basic_auth " + quote(user.Uuid) + " " + quote(user.Uuid) + "\n")
 	}
+	buf.WriteString("    probe_resistance\n")
 	buf.WriteString("    hide_ip\n")
 	buf.WriteString("    hide_via\n")
 	buf.WriteString("    acl {\n")
 	buf.WriteString("      allow all\n")
 	buf.WriteString("    }\n")
 	buf.WriteString("  }\n")
-	buf.WriteString("  respond \"Not Found\" 404\n")
+	buf.WriteString("  root * " + quote(s.coverDir()) + "\n")
+	buf.WriteString("  file_server\n")
 	buf.WriteString("}\n")
 
 	return buf.Bytes()
+}
+
+func (s *Server) writeCoverSite() error {
+	dir := s.coverDir()
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "index.html"), []byte(coverPageHTML()), 0644)
+}
+
+func (s *Server) coverDir() string {
+	return filepath.Join(s.workDir, "cover")
+}
+
+func coverPageHTML() string {
+	return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Welcome</title>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      color: #202124;
+      background: #f8fafd;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      width: min(680px, calc(100% - 48px));
+    }
+    h1 {
+      margin: 0 0 12px;
+      font-size: 32px;
+      font-weight: 600;
+      letter-spacing: 0;
+    }
+    p {
+      margin: 0;
+      color: #5f6368;
+      font-size: 16px;
+      line-height: 1.7;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Welcome</h1>
+    <p>This site is running normally.</p>
+  </main>
+</body>
+</html>`
 }
 
 func collectHosts(node *panel.NodeInfo) []string {
