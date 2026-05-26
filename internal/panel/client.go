@@ -58,8 +58,69 @@ type TlsSettings struct {
 	KeyFile          string   `json:"key_file"`
 	Provider         string   `json:"provider"`
 	DNSEnv           string   `json:"dns_env"`
-	RejectUnknownSni string   `json:"reject_unknown_sni"`
+	RejectUnknownSni int      `json:"reject_unknown_sni"`
 	AllowInsecure    int      `json:"allow_insecure"`
+}
+
+func (t *TlsSettings) UnmarshalJSON(data []byte) error {
+	type rawTLSSettings struct {
+		ServerName       string          `json:"server_name"`
+		ServerNames      []string        `json:"server_names"`
+		CertMode         string          `json:"cert_mode"`
+		CertFile         string          `json:"cert_file"`
+		KeyFile          string          `json:"key_file"`
+		Provider         string          `json:"provider"`
+		DNSEnv           string          `json:"dns_env"`
+		RejectUnknownSni json.RawMessage `json:"reject_unknown_sni"`
+		AllowInsecure    json.RawMessage `json:"allow_insecure"`
+	}
+
+	var raw rawTLSSettings
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	t.ServerName = raw.ServerName
+	t.ServerNames = raw.ServerNames
+	t.CertMode = raw.CertMode
+	t.CertFile = raw.CertFile
+	t.KeyFile = raw.KeyFile
+	t.Provider = raw.Provider
+	t.DNSEnv = raw.DNSEnv
+	t.RejectUnknownSni = parseFlexibleInt(raw.RejectUnknownSni)
+	t.AllowInsecure = parseFlexibleInt(raw.AllowInsecure)
+	return nil
+}
+
+func parseFlexibleInt(data json.RawMessage) int {
+	if len(data) == 0 || string(data) == "null" {
+		return 0
+	}
+
+	var intValue int
+	if err := json.Unmarshal(data, &intValue); err == nil {
+		return intValue
+	}
+
+	var boolValue bool
+	if err := json.Unmarshal(data, &boolValue); err == nil {
+		if boolValue {
+			return 1
+		}
+		return 0
+	}
+
+	var stringValue string
+	if err := json.Unmarshal(data, &stringValue); err == nil {
+		switch strings.ToLower(strings.TrimSpace(stringValue)) {
+		case "1", "true", "yes", "on":
+			return 1
+		default:
+			return 0
+		}
+	}
+
+	return 0
 }
 
 type CertInfo struct {
@@ -199,7 +260,7 @@ func (c *Client) GetNodeInfo(ctx context.Context) (*NodeInfo, error) {
 		CertDomain:       certDomain,
 		DNSEnv:           dnsEnv,
 		Provider:         cfg.TLSSettings.Provider,
-		RejectUnknownSni: cfg.TLSSettings.RejectUnknownSni == "1",
+		RejectUnknownSni: cfg.TLSSettings.RejectUnknownSni == 1,
 	}
 
 	return &cfg, nil
