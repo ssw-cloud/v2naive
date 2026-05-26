@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -73,6 +75,51 @@ func TestRenderConfigLocksProxyWhenNoUsers(t *testing.T) {
 	text := string(server.renderConfig())
 	if !strings.Contains(text, "basic_auth \"__disabled__\" \"__disabled__\"") {
 		t.Fatalf("expected placeholder auth when user list is empty, got:\n%s", text)
+	}
+}
+
+func TestWriteCoverSiteCreatesSSWEdgePages(t *testing.T) {
+	workDir := t.TempDir()
+	server := New(&panel.NodeInfo{
+		Id:         8,
+		Host:       "hk.sswnat.com",
+		ServerPort: 443,
+		CertInfo: &panel.CertInfo{
+			CertFile: "/tmp/cert.pem",
+			KeyFile:  "/tmp/key.pem",
+		},
+	}, nil, nil, conf.RuntimeConfig{
+		CaddyPath:     "/opt/v2naive/caddy",
+		WorkingDir:    workDir,
+		AdminPortBase: 22019,
+	})
+
+	if err := server.writeCoverSite(); err != nil {
+		t.Fatalf("writeCoverSite returned error: %v", err)
+	}
+
+	indexHTML, err := os.ReadFile(filepath.Join(server.coverDir(), "index.html"))
+	if err != nil {
+		t.Fatalf("read index.html failed: %v", err)
+	}
+	if !strings.Contains(string(indexHTML), "SSW Edge") || !strings.Contains(string(indexHTML), "Hong Kong Edge") {
+		t.Fatalf("unexpected index page content:\n%s", string(indexHTML))
+	}
+
+	statusHTML, err := os.ReadFile(filepath.Join(server.coverDir(), "status.html"))
+	if err != nil {
+		t.Fatalf("read status.html failed: %v", err)
+	}
+	if !strings.Contains(string(statusHTML), "Network status") {
+		t.Fatalf("unexpected status page content:\n%s", string(statusHTML))
+	}
+
+	docsHTML, err := os.ReadFile(filepath.Join(server.coverDir(), "docs.html"))
+	if err != nil {
+		t.Fatalf("read docs.html failed: %v", err)
+	}
+	if !strings.Contains(string(docsHTML), "Integration notes") || !strings.Contains(string(docsHTML), "hk.sswnat.com") {
+		t.Fatalf("unexpected docs page content:\n%s", string(docsHTML))
 	}
 }
 
