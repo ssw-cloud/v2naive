@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"net"
 	"os"
 	"path"
 	"strings"
@@ -68,13 +69,21 @@ func generateSelfSigned(domain, certPath, keyPath string) error {
 	if err != nil {
 		return err
 	}
+	dnsNames := []string{}
+	ipAddresses := []net.IP{}
+	if ip := net.ParseIP(domain); ip != nil {
+		ipAddresses = append(ipAddresses, ip)
+	} else {
+		dnsNames = append(dnsNames, domain)
+	}
 	template := &x509.Certificate{
 		Version:      3,
 		SerialNumber: big.NewInt(time.Now().Unix()),
 		Subject: pkix.Name{
 			CommonName: domain,
 		},
-		DNSNames:              []string{domain},
+		DNSNames:              dnsNames,
+		IPAddresses:           ipAddresses,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},

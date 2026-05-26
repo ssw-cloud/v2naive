@@ -32,6 +32,7 @@ type NodeInfo struct {
 	Id           int
 	Tag          string
 	Protocol     string
+	Host         string      `json:"host"`
 	ListenIP     string      `json:"listen_ip"`
 	ServerPort   int         `json:"server_port"`
 	TLS          int         `json:"tls"`
@@ -186,12 +187,16 @@ func (c *Client) GetNodeInfo(ctx context.Context) (*NodeInfo, error) {
 			}
 		}
 	}
+	certDomain := cfg.TLSSettings.PrimaryServerName()
+	if certDomain == "" {
+		certDomain = cfg.Host
+	}
 	cfg.CertInfo = &CertInfo{
 		CertMode:         cfg.TLSSettings.CertMode,
 		CertFile:         certFile,
 		KeyFile:          keyFile,
 		Email:            "node@v2board.com",
-		CertDomain:       cfg.TLSSettings.PrimaryServerName(),
+		CertDomain:       certDomain,
 		DNSEnv:           dnsEnv,
 		Provider:         cfg.TLSSettings.Provider,
 		RejectUnknownSni: cfg.TLSSettings.RejectUnknownSni == "1",
