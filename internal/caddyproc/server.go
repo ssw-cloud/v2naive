@@ -279,6 +279,9 @@ func (s *Server) renderConfig() []byte {
 	buf.WriteString("  admin " + s.adminAddr + "\n")
 	buf.WriteString("  auto_https off\n")
 	buf.WriteString("  order forward_proxy first\n")
+	buf.WriteString("  servers {\n")
+	buf.WriteString("    protocols h1 h2\n")
+	buf.WriteString("  }\n")
 	buf.WriteString("}\n\n")
 
 	addresses := append([]string{":" + strconv.Itoa(s.node.ServerPort)}, collectHosts(s.node)...)
@@ -1259,6 +1262,9 @@ func isNoisyCaddyError(text string) bool {
 	text = strings.ToLower(text)
 	return strings.Contains(text, "broken pipe") ||
 		strings.Contains(text, "stream closed") ||
+		strings.Contains(text, "h3_request_cancelled") ||
+		strings.Contains(text, "request cancelled") ||
+		strings.Contains(text, "request canceled") ||
 		strings.Contains(text, "client disconnected") ||
 		strings.Contains(text, "connection reset by peer") ||
 		strings.Contains(text, "use of closed network connection")

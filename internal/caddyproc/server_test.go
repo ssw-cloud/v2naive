@@ -41,6 +41,7 @@ func TestRenderConfigIncludesNaiveForwardProxyShape(t *testing.T) {
 		"admin 127.0.0.1:22022",
 		"auto_https off",
 		"order forward_proxy first",
+		"protocols h1 h2",
 		":443, us.sswnat.com, naive.example.com {",
 		"bind 0.0.0.0",
 		"tls \"/etc/v2naive/fullchain.cer\" \"/etc/v2naive/cert.key\"",
@@ -193,6 +194,7 @@ func TestNoisyCaddyErrorsAreSuppressed(t *testing.T) {
 	for _, text := range []string{
 		"write: broken pipe",
 		"http2: stream closed",
+		"H3_REQUEST_CANCELLED",
 		"read: connection reset by peer",
 		"use of closed network connection",
 	} {
