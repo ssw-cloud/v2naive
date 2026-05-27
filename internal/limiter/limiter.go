@@ -138,6 +138,13 @@ func (l *Limiter) Authorize(uuid, ip string) (int, bool) {
 	return determineSpeedLimit(l.NodeSpeedLimit, info.SpeedLimit), false
 }
 
+func (l *Limiter) UserID(uuid string) int {
+	if infoValue, ok := l.UserLimitInfo.Load(uuid); ok {
+		return infoValue.(*UserLimitInfo).UID
+	}
+	return 0
+}
+
 func (l *Limiter) ReleaseIP(uuid, ip string) {
 	ip = strings.TrimPrefix(ip, "::ffff:")
 	value, ok := l.UserOnlineIP.Load(uuid)

@@ -195,7 +195,7 @@ func TestTunnelEventsAcceptHostAndDurationFields(t *testing.T) {
 	}
 }
 
-func TestTunnelCloseLogUsesNumericUserID(t *testing.T) {
+func TestTunnelOpenLogUsesNumericUserID(t *testing.T) {
 	server := New(&panel.NodeInfo{
 		Id:         5,
 		ServerPort: 443,
@@ -221,12 +221,7 @@ func TestTunnelCloseLogUsesNumericUserID(t *testing.T) {
 	log.SetOutput(&out)
 	log.SetFormatter(&log.TextFormatter{DisableTimestamp: true, DisableQuote: true})
 
-	server.handleEventLine(`{"type":"open","user":"user-1","ip":"1.2.3.4","host":"github.com:443","target":"140.82.114.4:443"}`)
-	if out.Len() != 0 {
-		t.Fatalf("open event should not emit access log, got %q", out.String())
-	}
-
-	server.handleEventLine(`{"type":"close","user":"user-1","ip":"1.2.3.4","host":"github.com:443","target":"140.82.114.4:443","upload":100,"download":200,"duration_ms":3000}`)
+	server.handleEventLine(`{"type":"open","user":"user-1","user_id":7,"ip":"1.2.3.4","host":"github.com:443","target":"140.82.114.4:443"}`)
 	text := out.String()
 	for _, needle := range []string{
 		"from 1.2.3.4",
@@ -250,9 +245,15 @@ func TestTunnelCloseLogUsesNumericUserID(t *testing.T) {
 	if strings.Contains(text, "user_id:user-1") {
 		t.Fatalf("access log should not use uuid as user_id: %q", text)
 	}
+
+	out.Reset()
+	server.handleEventLine(`{"type":"close","user":"user-1","user_id":7,"ip":"1.2.3.4","host":"github.com:443","target":"140.82.114.4:443","upload":100,"download":200}`)
+	if out.Len() != 0 {
+		t.Fatalf("close event should not emit access log, got %q", out.String())
+	}
 }
 
-func TestTunnelCloseLogUsesZeroForUnknownNumericUserID(t *testing.T) {
+func TestTunnelLogUsesEventUserIDAfterUserDeleted(t *testing.T) {
 	server := New(&panel.NodeInfo{
 		Id:         5,
 		ServerPort: 443,
@@ -267,14 +268,44 @@ func TestTunnelCloseLogUsesZeroForUnknownNumericUserID(t *testing.T) {
 	})
 
 	text := server.formatAccessLog(tunnelEvent{
-		User:   "unknown-uuid",
+		User:   "deleted-uuid",
+		UserID: 1136,
 		IP:     "1.2.3.4",
 		Host:   "github.com:443",
 		Target: "140.82.114.4:443",
 	}, panel.UserInfo{})
 
-	if !strings.Contains(text, "user_id:0") || strings.Contains(text, "unknown-uuid") {
-		t.Fatalf("unknown users should not leak uuid in access log: %q", text)
+	if !strings.Contains(text, "user_id:1136") || strings.Contains(text, "deleted-uuid") {
+		t.Fatalf("access log should use event user id after deletion: %q", text)
+	}
+}
+
+func TestTrafficEventsKeepDeletedUserIDForAccounting(t *testing.T) {
+	server := New(&panel.NodeInfo{
+		Id:         5,
+		ServerPort: 443,
+		CertInfo: &panel.CertInfo{
+			CertFile: "/tmp/cert.pem",
+			KeyFile:  "/tmp/key.pem",
+		},
+	}, []panel.UserInfo{
+		{Id: 1136, Uuid: "user-1"},
+	}, nil, conf.RuntimeConfig{
+		CaddyPath:     "/opt/v2naive/caddy",
+		WorkingDir:    "/var/lib/v2naive",
+		AdminPortBase: 22019,
+	})
+
+	server.UpdateUsers(nil, []panel.UserInfo{{Id: 1136, Uuid: "user-1"}}, nil, nil)
+	server.handleEventLine(`{"type":"traffic","user":"user-1","user_id":1136,"ip":"1.2.3.4","host":"github.com:443","target":"140.82.114.4:443","upload":100,"download":200}`)
+	server.handleEventLine(`{"type":"close","user":"user-1","user_id":1136,"ip":"1.2.3.4","host":"github.com:443","target":"140.82.114.4:443","upload":10,"download":20}`)
+
+	traffic := server.GetUserTrafficSlice(0)
+	if len(traffic) != 1 {
+		t.Fatalf("expected one traffic report, got %+v", traffic)
+	}
+	if traffic[0].UID != 1136 || traffic[0].Upload != 110 || traffic[0].Download != 220 {
+		t.Fatalf("unexpected traffic snapshot: %+v", traffic[0])
 	}
 }
 
@@ -402,5 +433,8 @@ func TestAuthorizeReturnsSpeedLimit(t *testing.T) {
 	}
 	if body["speed_limit"] != 20 {
 		t.Fatalf("expected speed_limit=20, got %+v", body)
+	}
+	if body["user_id"] != 11 {
+		t.Fatalf("expected user_id=11, got %+v", body)
 	}
 }

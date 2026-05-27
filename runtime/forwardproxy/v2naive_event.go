@@ -10,6 +10,7 @@ const v2naiveEventPrefix = "V2NAIVE_EVENT "
 type v2naiveTunnelEvent struct {
 	Type     string `json:"type"`
 	User     string `json:"user"`
+	UserID   int    `json:"user_id,omitempty"`
 	IP       string `json:"ip"`
 	Host     string `json:"host,omitempty"`
 	Target   string `json:"target,omitempty"`

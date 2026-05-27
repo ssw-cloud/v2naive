@@ -20,6 +20,7 @@ type v2naiveAuthRequest struct {
 
 type v2naiveAuthResponse struct {
 	SpeedLimit int `json:"speed_limit"`
+	UserID     int `json:"user_id"`
 }
 
 func authorizeV2naiveUser(user, ip string) (v2naiveAuthResponse, error) {

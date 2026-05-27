@@ -1119,6 +1119,17 @@ func (t *trafficCounter) add(upload, download int64) {
 	t.mu.Unlock()
 }
 
+func (t *trafficCounter) setUID(uid int) {
+	if uid <= 0 {
+		return
+	}
+	t.mu.Lock()
+	if t.uid == 0 {
+		t.uid = uid
+	}
+	t.mu.Unlock()
+}
+
 func (t *trafficCounter) snapshotIfAbove(minTraffic int) (panel.UserTraffic, bool) {
 	threshold := int64(minTraffic) * 1000
 	t.mu.Lock()
@@ -1139,6 +1150,7 @@ func (t *trafficCounter) snapshotIfAbove(minTraffic int) (panel.UserTraffic, boo
 type tunnelEvent struct {
 	Type     string `json:"type"`
 	User     string `json:"user"`
+	UserID   int    `json:"user_id"`
 	IP       string `json:"ip"`
 	Host     string `json:"host"`
 	Target   string `json:"target"`
@@ -1293,16 +1305,18 @@ func (s *Server) handleEventLine(raw string) {
 
 	switch event.Type {
 	case "open":
+		user := s.userByUUID(event.User)
+		log.Info(s.formatAccessLog(event, user))
 		s.statsMu.Lock()
 		if _, ok := s.online[event.User]; !ok {
 			s.online[event.User] = map[string]int{}
 		}
 		s.online[event.User][event.IP]++
 		s.statsMu.Unlock()
+	case "traffic":
+		s.getCounterForEvent(event).add(event.Upload, event.Download)
 	case "close":
-		user := s.userByUUID(event.User)
-		log.Info(s.formatAccessLog(event, user))
-		s.getCounter(event.User).add(event.Upload, event.Download)
+		s.getCounterForEvent(event).add(event.Upload, event.Download)
 		s.limiter.ReleaseIP(event.User, event.IP)
 		s.statsMu.Lock()
 		if ipMap, ok := s.online[event.User]; ok {
@@ -1335,9 +1349,20 @@ func (s *Server) formatAccessLog(event tunnelEvent, user panel.UserInfo) string 
 	if target == "" {
 		target = host
 	}
-	userID := strconv.Itoa(user.Id)
-	if user.Id == 0 {
-		userID = "0"
+	if event.UserID > 0 {
+		userID := strconv.Itoa(event.UserID)
+		return fmt.Sprintf(
+			"| node:%d | from %s |accepted| tcp:%s | target:%s | user_id:%s",
+			s.node.Id,
+			source,
+			host,
+			target,
+			userID,
+		)
+	}
+	userID := "0"
+	if user.Id > 0 {
+		userID = strconv.Itoa(user.Id)
 	}
 	return fmt.Sprintf(
 		"| node:%d | from %s |accepted| tcp:%s | target:%s | user_id:%s",
@@ -1347,6 +1372,14 @@ func (s *Server) formatAccessLog(event tunnelEvent, user panel.UserInfo) string 
 		target,
 		userID,
 	)
+}
+
+func (s *Server) getCounterForEvent(event tunnelEvent) *trafficCounter {
+	uid := event.UserID
+	if uid == 0 {
+		uid = s.userByUUID(event.User).Id
+	}
+	return s.getCounterWithUID(event.User, uid)
 }
 
 func (s *Server) replaceUsers(users []panel.UserInfo) {
@@ -1405,25 +1438,22 @@ func (s *Server) applyUserDelta(added, deleted, modified []panel.UserInfo) {
 	}
 }
 
-func (s *Server) getCounter(uuid string) *trafficCounter {
+func (s *Server) getCounterWithUID(uuid string, uid int) *trafficCounter {
 	s.statsMu.RLock()
 	counter, ok := s.stats[uuid]
 	s.statsMu.RUnlock()
 	if ok {
+		counter.setUID(uid)
 		return counter
 	}
-
-	user := s.userByUUID(uuid)
 
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()
 	if counter, ok = s.stats[uuid]; ok {
+		counter.setUID(uid)
 		return counter
 	}
-	counter = &trafficCounter{}
-	if user.Id != 0 {
-		counter.uid = user.Id
-	}
+	counter = &trafficCounter{uid: uid}
 	s.stats[uuid] = counter
 	return counter
 }
@@ -1504,6 +1534,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]int{
 		"speed_limit": speedLimit,
+		"user_id":     s.limiter.UserID(req.User),
 	})
 }
 

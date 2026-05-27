@@ -35,6 +35,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -365,27 +366,31 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 		}
 		defer targetConn.Close()
 		remoteHostPort := targetConn.RemoteAddr().String()
-		openedAt := time.Now()
+		stats := &streamStats{}
+		doneReporting := make(chan struct{})
+		defer close(doneReporting)
+		go reportActiveTunnel(userID, authResult.UserID, clientIP, requestedHostPort, remoteHostPort, targetConn, stats, doneReporting)
 		emitV2naiveEvent(v2naiveTunnelEvent{
 			Type:   "open",
 			User:   userID,
+			UserID: authResult.UserID,
 			IP:     clientIP,
 			Host:   requestedHostPort,
 			Target: remoteHostPort,
 		})
 		releaseOnFailure = false
 
-		stats := &streamStats{}
 		defer func() {
+			upload, download := stats.Delta()
 			emitV2naiveEvent(v2naiveTunnelEvent{
 				Type:     "close",
 				User:     userID,
+				UserID:   authResult.UserID,
 				IP:       clientIP,
 				Host:     requestedHostPort,
 				Target:   remoteHostPort,
-				Upload:   stats.Upload,
-				Download: stats.Download,
-				Duration: time.Since(openedAt).Milliseconds(),
+				Upload:   upload,
+				Download: download,
 			})
 		}()
 
@@ -709,8 +714,42 @@ const (
 // Returns when clientWriter-> target stream is done.
 // Caddy should finish writing target -> clientReader.
 type streamStats struct {
-	Upload   int64
-	Download int64
+	upload           atomic.Int64
+	download         atomic.Int64
+	reportedUpload   atomic.Int64
+	reportedDownload atomic.Int64
+}
+
+func (s *streamStats) AddUpload(n int64) {
+	if s != nil && n > 0 {
+		s.upload.Add(n)
+	}
+}
+
+func (s *streamStats) AddDownload(n int64) {
+	if s != nil && n > 0 {
+		s.download.Add(n)
+	}
+}
+
+func (s *streamStats) Delta() (int64, int64) {
+	if s == nil {
+		return 0, 0
+	}
+	return deltaSinceLast(&s.upload, &s.reportedUpload), deltaSinceLast(&s.download, &s.reportedDownload)
+}
+
+func deltaSinceLast(total, reported *atomic.Int64) int64 {
+	for {
+		current := total.Load()
+		previous := reported.Load()
+		if current <= previous {
+			return 0
+		}
+		if reported.CompareAndSwap(previous, current) {
+			return current - previous
+		}
+	}
 }
 
 type streamResult struct {
@@ -719,12 +758,12 @@ type streamResult struct {
 }
 
 func dualStream(target net.Conn, clientReader io.ReadCloser, clientWriter io.Writer, padding bool, stats *streamStats, userLimiter *dynamicRateLimiter) error {
-	stream := func(w io.Writer, r io.Reader, paddingType int, resultCh chan<- streamResult) {
+	stream := func(w io.Writer, r io.Reader, paddingType int, upload bool, resultCh chan<- streamResult) {
 		// copy bytes from r to w
 		bufPtr := bufferPool.Get().(*[]byte)
 		buf := *bufPtr
 		buf = buf[0:cap(buf)]
-		n, _err := flushingIoCopy(w, r, buf, paddingType, userLimiter)
+		n, _err := flushingIoCopy(w, r, buf, paddingType, userLimiter, stats, upload)
 		bufferPool.Put(bufPtr)
 
 		if cw, ok := w.(closeWriter); ok {
@@ -736,19 +775,15 @@ func dualStream(target net.Conn, clientReader io.ReadCloser, clientWriter io.Wri
 	uploadCh := make(chan streamResult, 1)
 	downloadCh := make(chan streamResult, 1)
 	if padding {
-		go stream(target, clientReader, RemovePadding, uploadCh)
-		go stream(clientWriter, target, AddPadding, downloadCh)
+		go stream(target, clientReader, RemovePadding, true, uploadCh)
+		go stream(clientWriter, target, AddPadding, false, downloadCh)
 	} else {
-		go stream(target, clientReader, NoPadding, uploadCh)
-		go stream(clientWriter, target, NoPadding, downloadCh)
+		go stream(target, clientReader, NoPadding, true, uploadCh)
+		go stream(clientWriter, target, NoPadding, false, downloadCh)
 	}
 
 	upload := <-uploadCh
 	download := <-downloadCh
-	if stats != nil {
-		stats.Upload = upload.count
-		stats.Download = download.count
-	}
 	if upload.err != nil && upload.err != io.EOF {
 		return upload.err
 	}
@@ -758,6 +793,35 @@ func dualStream(target net.Conn, clientReader io.ReadCloser, clientWriter io.Wri
 	return nil
 }
 
+func reportActiveTunnel(user string, userID int, ip, host, target string, targetConn net.Conn, stats *streamStats, done <-chan struct{}) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			upload, download := stats.Delta()
+			if upload > 0 || download > 0 {
+				emitV2naiveEvent(v2naiveTunnelEvent{
+					Type:     "traffic",
+					User:     user,
+					UserID:   userID,
+					IP:       ip,
+					Host:     host,
+					Target:   target,
+					Upload:   upload,
+					Download: download,
+				})
+			}
+			if _, err := authorizeV2naiveUser(user, ip); err != nil {
+				_ = targetConn.Close()
+				return
+			}
+		}
+	}
+}
+
 type closeWriter interface {
 	CloseWrite() error
 }
@@ -765,7 +829,7 @@ type closeWriter interface {
 // flushingIoCopy is analogous to buffering io.Copy(), but also attempts to flush on each iteration.
 // If dst does not implement http.Flusher(e.g. net.TCPConn), it will do a simple io.CopyBuffer().
 // Reasoning: http2ResponseWriter will not flush on its own, so we have to do it manually.
-func flushingIoCopy(dst io.Writer, src io.Reader, buf []byte, paddingType int, userLimiter *dynamicRateLimiter) (written int64, err error) {
+func flushingIoCopy(dst io.Writer, src io.Reader, buf []byte, paddingType int, userLimiter *dynamicRateLimiter, stats *streamStats, upload bool) (written int64, err error) {
 	rw, ok := dst.(http.ResponseWriter)
 	var rc *http.ResponseController
 	if ok {
@@ -814,7 +878,13 @@ func flushingIoCopy(dst io.Writer, src io.Reader, buf []byte, paddingType int, u
 			}
 			nw, ew := dst.Write(buf[0:nr])
 			if nw > 0 {
-				written += int64(logicalNr)
+				logicalWritten := int64(logicalNr)
+				written += logicalWritten
+				if upload {
+					stats.AddUpload(logicalWritten)
+				} else {
+					stats.AddDownload(logicalWritten)
+				}
 			}
 			if ew != nil {
 				err = ew
