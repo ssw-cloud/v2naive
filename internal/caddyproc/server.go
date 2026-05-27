@@ -304,6 +304,9 @@ func (s *Server) renderConfig() []byte {
 	buf.WriteString("    probe_resistance\n")
 	buf.WriteString("    hide_ip\n")
 	buf.WriteString("    hide_via\n")
+	buf.WriteString("    dial_timeout 10s\n")
+	buf.WriteString("    max_idle_conns 1024\n")
+	buf.WriteString("    max_idle_conns_per_host 64\n")
 	buf.WriteString("    acl {\n")
 	buf.WriteString("      allow all\n")
 	buf.WriteString("    }\n")
@@ -1337,15 +1340,12 @@ func (s *Server) formatAccessLog(event tunnelEvent, user panel.UserInfo) string 
 		userID = "0"
 	}
 	return fmt.Sprintf(
-		"| node:%d | from %s |accepted| tcp:%s | target:%s | user_id:%s | upload:%d | download:%d | duration:%dms",
+		"| node:%d | from %s |accepted| tcp:%s | target:%s | user_id:%s",
 		s.node.Id,
 		source,
 		host,
 		target,
 		userID,
-		event.Upload,
-		event.Download,
-		event.Duration,
 	)
 }
 

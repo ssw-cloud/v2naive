@@ -52,6 +52,9 @@ func TestRenderConfigIncludesNaiveForwardProxyShape(t *testing.T) {
 		"probe_resistance",
 		"hide_ip",
 		"hide_via",
+		"dial_timeout 10s",
+		"max_idle_conns 1024",
+		"max_idle_conns_per_host 64",
 		"allow all",
 		"root * \"/var/lib/v2naive/node-3/cover\"",
 		"file_server",
@@ -230,12 +233,18 @@ func TestTunnelCloseLogUsesNumericUserID(t *testing.T) {
 		"|accepted| tcp:github.com:443",
 		"target:140.82.114.4:443",
 		"user_id:7",
-		"upload:100",
-		"download:200",
-		"duration:3000ms",
 	} {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("expected access log to contain %q, got %q", needle, text)
+		}
+	}
+	for _, needle := range []string{
+		"upload:",
+		"download:",
+		"duration:",
+	} {
+		if strings.Contains(text, needle) {
+			t.Fatalf("access log should not contain %q: %q", needle, text)
 		}
 	}
 	if strings.Contains(text, "user_id:user-1") {
