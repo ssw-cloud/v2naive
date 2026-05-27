@@ -395,12 +395,10 @@ write_logrotate() {
   cat >"$LOGROTATE_PATH" <<EOF
 ${LOG_DIR}/*.log {
   daily
-  rotate 14
+  rotate 1
   size 50M
   missingok
   notifempty
-  compress
-  delaycompress
   copytruncate
 }
 EOF

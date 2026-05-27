@@ -349,11 +349,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 				fmt.Errorf("ResponseWriter flush error: %v", flushErr))
 		}
 
-		hostPort := r.URL.Host
-		if hostPort == "" {
-			hostPort = r.Host
+		requestedHostPort := r.URL.Host
+		if requestedHostPort == "" {
+			requestedHostPort = r.Host
 		}
-		targetConn, err := h.dialContextCheckACL(ctx, "tcp", hostPort)
+		targetConn, err := h.dialContextCheckACL(ctx, "tcp", requestedHostPort)
 		if err != nil {
 			return err
 		}
@@ -364,12 +364,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 				fmt.Errorf("hostname %s is not allowed", r.URL.Hostname()))
 		}
 		defer targetConn.Close()
-		hostPort = targetConn.RemoteAddr().String()
+		remoteHostPort := targetConn.RemoteAddr().String()
+		openedAt := time.Now()
 		emitV2naiveEvent(v2naiveTunnelEvent{
 			Type:   "open",
 			User:   userID,
 			IP:     clientIP,
-			Target: hostPort,
+			Host:   requestedHostPort,
+			Target: remoteHostPort,
 		})
 		releaseOnFailure = false
 
@@ -379,9 +381,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 				Type:     "close",
 				User:     userID,
 				IP:       clientIP,
-				Target:   hostPort,
+				Host:     requestedHostPort,
+				Target:   remoteHostPort,
 				Upload:   stats.Upload,
 				Download: stats.Download,
+				Duration: time.Since(openedAt).Milliseconds(),
 			})
 		}()
 

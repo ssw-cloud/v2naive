@@ -164,6 +164,47 @@ func TestTunnelEventsUpdateOnlineAndTraffic(t *testing.T) {
 	}
 }
 
+func TestTunnelEventsAcceptHostAndDurationFields(t *testing.T) {
+	server := New(&panel.NodeInfo{
+		Id:         5,
+		ServerPort: 443,
+		CertInfo: &panel.CertInfo{
+			CertFile: "/tmp/cert.pem",
+			KeyFile:  "/tmp/key.pem",
+		},
+	}, []panel.UserInfo{
+		{Id: 7, Uuid: "user-1"},
+	}, nil, conf.RuntimeConfig{
+		CaddyPath:     "/opt/v2naive/caddy",
+		WorkingDir:    "/var/lib/v2naive",
+		AdminPortBase: 22019,
+	})
+
+	server.handleEventLine(`{"type":"open","user":"user-1","ip":"1.2.3.4","host":"github.com:443","target":"140.82.114.4:443"}`)
+	server.handleEventLine(`{"type":"close","user":"user-1","ip":"1.2.3.4","host":"github.com:443","target":"140.82.114.4:443","upload":100,"download":200,"duration_ms":3000}`)
+
+	traffic := server.GetUserTrafficSlice(0)
+	if len(traffic) != 1 || traffic[0].Upload != 100 || traffic[0].Download != 200 {
+		t.Fatalf("unexpected traffic snapshot: %+v", traffic)
+	}
+}
+
+func TestNoisyCaddyErrorsAreSuppressed(t *testing.T) {
+	for _, text := range []string{
+		"write: broken pipe",
+		"http2: stream closed",
+		"read: connection reset by peer",
+		"use of closed network connection",
+	} {
+		if !isNoisyCaddyError(text) {
+			t.Fatalf("expected %q to be noisy", text)
+		}
+	}
+	if isNoisyCaddyError("dial tcp: i/o timeout") {
+		t.Fatal("timeout errors should still be logged")
+	}
+}
+
 func TestConsumeOutputParsesEmbeddedEventPrefix(t *testing.T) {
 	server := New(&panel.NodeInfo{
 		Id:         6,

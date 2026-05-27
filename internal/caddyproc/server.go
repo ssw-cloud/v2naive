@@ -1134,15 +1134,28 @@ type tunnelEvent struct {
 	Type     string `json:"type"`
 	User     string `json:"user"`
 	IP       string `json:"ip"`
+	Host     string `json:"host"`
 	Target   string `json:"target"`
 	Upload   int64  `json:"upload"`
 	Download int64  `json:"download"`
+	Duration int64  `json:"duration_ms"`
 }
 
 const eventPrefix = "V2NAIVE_EVENT "
 
 type caddyLogLine struct {
+	Level   string `json:"level"`
+	Logger  string `json:"logger"`
 	Message string `json:"msg"`
+	Error   string `json:"error"`
+	Request struct {
+		ClientIP string `json:"client_ip"`
+		RemoteIP string `json:"remote_ip"`
+		Host     string `json:"host"`
+		URI      string `json:"uri"`
+		Method   string `json:"method"`
+		Proto    string `json:"proto"`
+	} `json:"request"`
 }
 
 func (s *Server) consumeOutput(reader io.Reader, stderr bool) {
@@ -1155,18 +1168,73 @@ func (s *Server) consumeOutput(reader io.Reader, stderr bool) {
 			s.handleEventLine(raw)
 			continue
 		}
-		entry := log.WithField("node_id", s.node.Id)
-		if stderr {
-			entry.Info("[caddy] " + line)
-		} else {
-			entry.Info("[caddy] " + line)
-		}
+		s.logCaddyLine(line, stderr)
 	}
 	if err := scanner.Err(); err != nil {
 		log.WithFields(log.Fields{
 			"node_id": s.node.Id,
 			"err":     err,
 		}).Error("read caddy output failed")
+	}
+}
+
+func (s *Server) logCaddyLine(line string, stderr bool) {
+	var caddyLog caddyLogLine
+	if err := json.Unmarshal([]byte(line), &caddyLog); err == nil {
+		s.logStructuredCaddyLine(caddyLog)
+		return
+	}
+
+	if strings.TrimSpace(line) == "" {
+		return
+	}
+	log.WithFields(log.Fields{
+		"node_id": s.node.Id,
+		"stream":  streamName(stderr),
+	}).Debug("[caddy] " + line)
+}
+
+func (s *Server) logStructuredCaddyLine(caddyLog caddyLogLine) {
+	if isNoisyCaddyError(caddyLog.Error) || isNoisyCaddyError(caddyLog.Message) {
+		return
+	}
+
+	fields := log.Fields{
+		"node_id": s.node.Id,
+	}
+	if caddyLog.Logger != "" {
+		fields["logger"] = caddyLog.Logger
+	}
+	if caddyLog.Request.ClientIP != "" {
+		fields["source_ip"] = caddyLog.Request.ClientIP
+	} else if caddyLog.Request.RemoteIP != "" {
+		fields["source_ip"] = caddyLog.Request.RemoteIP
+	}
+	if caddyLog.Request.Host != "" {
+		fields["target"] = caddyLog.Request.Host
+	} else if caddyLog.Request.URI != "" {
+		fields["target"] = caddyLog.Request.URI
+	}
+	if caddyLog.Request.Method != "" {
+		fields["method"] = caddyLog.Request.Method
+	}
+	if caddyLog.Request.Proto != "" {
+		fields["proto"] = caddyLog.Request.Proto
+	}
+	if caddyLog.Error != "" {
+		fields["err"] = caddyLog.Error
+	}
+
+	msg := caddyLog.Message
+	if msg == "" {
+		msg = "caddy event"
+	}
+	entry := log.WithFields(fields)
+	switch strings.ToLower(caddyLog.Level) {
+	case "error", "warn", "warning":
+		entry.Warn(msg)
+	default:
+		entry.Debug(msg)
 	}
 }
 
@@ -1187,6 +1255,22 @@ func trimEventPrefix(text string) (string, bool) {
 	return "", false
 }
 
+func isNoisyCaddyError(text string) bool {
+	text = strings.ToLower(text)
+	return strings.Contains(text, "broken pipe") ||
+		strings.Contains(text, "stream closed") ||
+		strings.Contains(text, "client disconnected") ||
+		strings.Contains(text, "connection reset by peer") ||
+		strings.Contains(text, "use of closed network connection")
+}
+
+func streamName(stderr bool) string {
+	if stderr {
+		return "stderr"
+	}
+	return "stdout"
+}
+
 func (s *Server) handleEventLine(raw string) {
 	var event tunnelEvent
 	if err := json.Unmarshal([]byte(raw), &event); err != nil {
@@ -1200,6 +1284,13 @@ func (s *Server) handleEventLine(raw string) {
 
 	switch event.Type {
 	case "open":
+		log.WithFields(log.Fields{
+			"node_id":   s.node.Id,
+			"user_id":   event.User,
+			"source_ip": event.IP,
+			"host":      event.Host,
+			"target":    event.Target,
+		}).Info("proxy connect opened")
 		s.statsMu.Lock()
 		if _, ok := s.online[event.User]; !ok {
 			s.online[event.User] = map[string]int{}
@@ -1207,6 +1298,16 @@ func (s *Server) handleEventLine(raw string) {
 		s.online[event.User][event.IP]++
 		s.statsMu.Unlock()
 	case "close":
+		log.WithFields(log.Fields{
+			"node_id":     s.node.Id,
+			"user_id":     event.User,
+			"source_ip":   event.IP,
+			"host":        event.Host,
+			"target":      event.Target,
+			"upload":      event.Upload,
+			"download":    event.Download,
+			"duration_ms": event.Duration,
+		}).Info("proxy connect closed")
 		s.getCounter(event.User).add(event.Upload, event.Download)
 		s.limiter.ReleaseIP(event.User, event.IP)
 		s.statsMu.Lock()
