@@ -40,6 +40,7 @@ type Server struct {
 
 	usersMu sync.RWMutex
 	users   map[string]panel.UserInfo
+	userIDs map[string]int
 
 	statsMu sync.RWMutex
 	stats   map[string]*trafficCounter
@@ -57,6 +58,7 @@ func New(node *panel.NodeInfo, users []panel.UserInfo, alive map[int]int, runtim
 		configPath: filepath.Join(workDir, "Caddyfile"),
 		workDir:    workDir,
 		users:      make(map[string]panel.UserInfo, len(users)),
+		userIDs:    make(map[string]int, len(users)),
 		stats:      make(map[string]*trafficCounter, len(users)),
 		online:     make(map[string]map[string]int),
 		limiter:    limiter.New(users, alive),
@@ -1098,8 +1100,10 @@ func quote(v string) string {
 }
 
 type authRequest struct {
-	User string `json:"user"`
-	IP   string `json:"ip"`
+	User   string `json:"user"`
+	IP     string `json:"ip"`
+	Host   string `json:"host"`
+	Target string `json:"target"`
 }
 
 type trafficCounter struct {
@@ -1377,9 +1381,36 @@ func (s *Server) formatAccessLog(event tunnelEvent, user panel.UserInfo) string 
 func (s *Server) getCounterForEvent(event tunnelEvent) *trafficCounter {
 	uid := event.UserID
 	if uid == 0 {
-		uid = s.userByUUID(event.User).Id
+		uid = s.userIDByUUID(event.User)
 	}
 	return s.getCounterWithUID(event.User, uid)
+}
+
+func (s *Server) formatRejectedLog(req authRequest, userID int, reason string) string {
+	source := req.IP
+	if source == "" {
+		source = "-"
+	}
+	host := req.Host
+	if host == "" {
+		host = req.Target
+	}
+	if host == "" {
+		host = "-"
+	}
+	target := req.Target
+	if target == "" {
+		target = host
+	}
+	return fmt.Sprintf(
+		"| node:%d | from %s |rejected| tcp:%s | target:%s | user_id:%d | reason:%s",
+		s.node.Id,
+		source,
+		host,
+		target,
+		userID,
+		reason,
+	)
 }
 
 func (s *Server) replaceUsers(users []panel.UserInfo) {
@@ -1388,6 +1419,9 @@ func (s *Server) replaceUsers(users []panel.UserInfo) {
 	nextUsers := make(map[string]panel.UserInfo, len(users))
 	for _, user := range users {
 		nextUsers[user.Uuid] = user
+		if user.Id > 0 {
+			s.userIDs[user.Uuid] = user.Id
+		}
 	}
 	s.users = nextUsers
 	s.statsMu.Lock()
@@ -1424,12 +1458,18 @@ func (s *Server) applyUserDelta(added, deleted, modified []panel.UserInfo) {
 	}
 	for _, user := range added {
 		s.users[user.Uuid] = user
+		if user.Id > 0 {
+			s.userIDs[user.Uuid] = user.Id
+		}
 		if _, ok := s.stats[user.Uuid]; !ok {
 			s.stats[user.Uuid] = &trafficCounter{uid: user.Id}
 		}
 	}
 	for _, user := range modified {
 		s.users[user.Uuid] = user
+		if user.Id > 0 {
+			s.userIDs[user.Uuid] = user.Id
+		}
 		if stat, ok := s.stats[user.Uuid]; ok {
 			stat.uid = user.Id
 		} else {
@@ -1472,6 +1512,22 @@ func (s *Server) userByUUID(uuid string) panel.UserInfo {
 	s.usersMu.RLock()
 	defer s.usersMu.RUnlock()
 	return s.users[uuid]
+}
+
+func (s *Server) userIDByUUID(uuid string) int {
+	s.usersMu.RLock()
+	defer s.usersMu.RUnlock()
+	if user := s.users[uuid]; user.Id > 0 {
+		return user.Id
+	}
+	return s.userIDs[uuid]
+}
+
+func (s *Server) hasActiveUser(uuid string) bool {
+	s.usersMu.RLock()
+	defer s.usersMu.RUnlock()
+	_, ok := s.users[uuid]
+	return ok
 }
 
 func (s *Server) startAuthServerLocked() error {
@@ -1526,15 +1582,28 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	userID := s.userIDByUUID(req.User)
 	speedLimit, reject := s.limiter.Authorize(req.User, req.IP)
 	if reject {
+		reason := "traffic_exhausted"
+		if userID == 0 {
+			reason = "unauthorized"
+		} else if s.hasActiveUser(req.User) {
+			reason = "device_limit"
+		}
+		log.Info(s.formatRejectedLog(req, userID, reason))
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"user_id": userID,
+			"reason":  reason,
+		})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]int{
 		"speed_limit": speedLimit,
-		"user_id":     s.limiter.UserID(req.User),
+		"user_id":     userID,
 	})
 }
 

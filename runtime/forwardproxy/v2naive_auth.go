@@ -14,8 +14,10 @@ var v2naiveAuthHTTPClient = &http.Client{
 }
 
 type v2naiveAuthRequest struct {
-	User string `json:"user"`
-	IP   string `json:"ip"`
+	User   string `json:"user"`
+	IP     string `json:"ip"`
+	Host   string `json:"host,omitempty"`
+	Target string `json:"target,omitempty"`
 }
 
 type v2naiveAuthResponse struct {
@@ -23,15 +25,17 @@ type v2naiveAuthResponse struct {
 	UserID     int `json:"user_id"`
 }
 
-func authorizeV2naiveUser(user, ip string) (v2naiveAuthResponse, error) {
+func authorizeV2naiveUser(user, ip, host, target string) (v2naiveAuthResponse, error) {
 	authURL := os.Getenv("V2NAIVE_AUTH_URL")
 	if authURL == "" || user == "" || ip == "" {
 		return v2naiveAuthResponse{}, nil
 	}
 
 	body, err := json.Marshal(v2naiveAuthRequest{
-		User: user,
-		IP:   ip,
+		User:   user,
+		IP:     ip,
+		Host:   host,
+		Target: target,
 	})
 	if err != nil {
 		return v2naiveAuthResponse{}, err

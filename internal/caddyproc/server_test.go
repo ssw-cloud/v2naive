@@ -309,6 +309,91 @@ func TestTrafficEventsKeepDeletedUserIDForAccounting(t *testing.T) {
 	}
 }
 
+func TestAuthorizeRejectLogsTrafficExhaustedWithCachedUserID(t *testing.T) {
+	server := New(&panel.NodeInfo{
+		Id:         5,
+		ServerPort: 443,
+		CertInfo: &panel.CertInfo{
+			CertFile: "/tmp/cert.pem",
+			KeyFile:  "/tmp/key.pem",
+		},
+	}, []panel.UserInfo{
+		{Id: 1136, Uuid: "user-1"},
+	}, nil, conf.RuntimeConfig{
+		CaddyPath:     "/opt/v2naive/caddy",
+		WorkingDir:    "/var/lib/v2naive",
+		AdminPortBase: 22019,
+	})
+	server.UpdateUsers(nil, []panel.UserInfo{{Id: 1136, Uuid: "user-1"}}, nil, nil)
+
+	var out bytes.Buffer
+	previousOutput := log.StandardLogger().Out
+	previousFormatter := log.StandardLogger().Formatter
+	defer func() {
+		log.SetOutput(previousOutput)
+		log.SetFormatter(previousFormatter)
+	}()
+	log.SetOutput(&out)
+	log.SetFormatter(&log.TextFormatter{DisableTimestamp: true, DisableQuote: true})
+
+	request := httptest.NewRequest(http.MethodPost, "/authorize", strings.NewReader(`{"user":"user-1","ip":"36.24.58.161","host":"vault.quark.cn:443","target":"2408:4001:f00::318:443"}`))
+	recorder := httptest.NewRecorder()
+	server.handleAuthorize(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for deleted user, got %d", recorder.Code)
+	}
+	text := out.String()
+	for _, needle := range []string{
+		"|rejected| tcp:vault.quark.cn:443",
+		"user_id:1136",
+		"reason:traffic_exhausted",
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("expected rejected log to contain %q, got %q", needle, text)
+		}
+	}
+}
+
+func TestAuthorizeAllowsUserAfterQuotaReset(t *testing.T) {
+	user := panel.UserInfo{Id: 1136, Uuid: "user-1"}
+	server := New(&panel.NodeInfo{
+		Id:         5,
+		ServerPort: 443,
+		CertInfo: &panel.CertInfo{
+			CertFile: "/tmp/cert.pem",
+			KeyFile:  "/tmp/key.pem",
+		},
+	}, []panel.UserInfo{
+		user,
+	}, nil, conf.RuntimeConfig{
+		CaddyPath:     "/opt/v2naive/caddy",
+		WorkingDir:    "/var/lib/v2naive",
+		AdminPortBase: 22019,
+	})
+
+	server.UpdateUsers(nil, []panel.UserInfo{user}, nil, []panel.UserInfo{})
+	rejected := httptest.NewRecorder()
+	server.handleAuthorize(rejected, httptest.NewRequest(http.MethodPost, "/authorize", strings.NewReader(`{"user":"user-1","ip":"36.24.58.161","host":"vault.quark.cn:443","target":"2408:4001:f00::318:443"}`)))
+	if rejected.Code != http.StatusForbidden {
+		t.Fatalf("expected deleted user to be rejected, got %d", rejected.Code)
+	}
+
+	server.UpdateUsers([]panel.UserInfo{user}, nil, nil, []panel.UserInfo{user})
+	allowed := httptest.NewRecorder()
+	server.handleAuthorize(allowed, httptest.NewRequest(http.MethodPost, "/authorize", strings.NewReader(`{"user":"user-1","ip":"36.24.58.161","host":"vault.quark.cn:443","target":"2408:4001:f00::318:443"}`)))
+	if allowed.Code != http.StatusOK {
+		t.Fatalf("expected restored user to be allowed, got %d", allowed.Code)
+	}
+
+	var body map[string]int
+	if err := json.Unmarshal(allowed.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body failed: %v", err)
+	}
+	if body["user_id"] != 1136 {
+		t.Fatalf("expected restored user_id=1136, got %+v", body)
+	}
+}
+
 func TestNoisyCaddyErrorsAreSuppressed(t *testing.T) {
 	for _, text := range []string{
 		"write: broken pipe",

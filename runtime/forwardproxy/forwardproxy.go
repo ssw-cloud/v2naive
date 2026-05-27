@@ -305,7 +305,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 		repl := r.Context().Value(caddy.ReplacerCtxKey).(*caddy.Replacer)
 		userID, _ := repl.GetString("http.auth.user.id")
 		clientIP := remoteIPOnly(r.RemoteAddr)
-		authResult, err := authorizeV2naiveUser(userID, clientIP)
+		requestedHostPort := r.URL.Host
+		if requestedHostPort == "" {
+			requestedHostPort = r.Host
+		}
+		authResult, err := authorizeV2naiveUser(userID, clientIP, requestedHostPort, requestedHostPort)
 		if err != nil {
 			return caddyhttp.Error(http.StatusForbidden, fmt.Errorf("device limit reached"))
 		}
@@ -350,10 +354,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 				fmt.Errorf("ResponseWriter flush error: %v", flushErr))
 		}
 
-		requestedHostPort := r.URL.Host
-		if requestedHostPort == "" {
-			requestedHostPort = r.Host
-		}
 		targetConn, err := h.dialContextCheckACL(ctx, "tcp", requestedHostPort)
 		if err != nil {
 			return err
@@ -814,7 +814,7 @@ func reportActiveTunnel(user string, userID int, ip, host, target string, target
 					Download: download,
 				})
 			}
-			if _, err := authorizeV2naiveUser(user, ip); err != nil {
+			if _, err := authorizeV2naiveUser(user, ip, host, target); err != nil {
 				_ = targetConn.Close()
 				return
 			}
