@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +15,11 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/ssw-cloud/v2naive/internal/conf"
 	"github.com/vmihailenco/msgpack/v5"
+)
+
+const (
+	DefaultCertFile = "/etc/v2naive/fullchain.cer"
+	DefaultKeyFile  = "/etc/v2naive/cert.key"
 )
 
 type Client struct {
@@ -233,10 +237,10 @@ func (c *Client) GetNodeInfo(ctx context.Context) (*NodeInfo, error) {
 	certFile := cfg.TLSSettings.CertFile
 	keyFile := cfg.TLSSettings.KeyFile
 	if certFile == "" {
-		certFile = filepath.Join("/etc/v2naive", fmt.Sprintf("naive%d.cer", c.NodeID))
+		certFile = DefaultCertFile
 	}
 	if keyFile == "" {
-		keyFile = filepath.Join("/etc/v2naive", fmt.Sprintf("naive%d.key", c.NodeID))
+		keyFile = DefaultKeyFile
 	}
 	dnsEnv := map[string]string{}
 	if cfg.TLSSettings.DNSEnv != "" {
