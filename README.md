@@ -75,6 +75,15 @@ bash <(curl -fsSL https://raw.githubusercontent.com/ssw-cloud/v2naive/main/scrip
 ```
 
 默认会优先下载 GitHub Release 里的 Linux 二进制包，只有在找不到对应 release 时才会回退到源码编译。
+不指定 `--version` 时会自动使用 latest release。
+
+统一升级已有节点：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/ssw-cloud/v2naive/main/script/install.sh) --upgrade
+```
+
+`--upgrade` 会复用现有 `/etc/v2naive/config.yml`，只更新二进制、Caddy runtime、systemd 服务和 logrotate，不会重写节点 ID、面板地址或 API key。
 
 当 `Engine=caddy` 时，安装脚本还会额外构建一个带本地统计补丁的 `forwardproxy@naive` 运行时：
 

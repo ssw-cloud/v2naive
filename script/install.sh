@@ -21,6 +21,7 @@ MIN_GO_VERSION="${MIN_GO_VERSION:-1.24.0}"
 GO_BIN=""
 BUILD_FROM_SOURCE=0
 ENGINE="${ENGINE:-caddy}"
+UPGRADE_ONLY=0
 
 API_HOST=""
 NODE_ID=""
@@ -30,8 +31,10 @@ usage() {
   cat <<'EOF'
 Usage:
   bash install.sh --api-host https://panel.example.com --node-id 1 --api-key your-token
+  bash install.sh --upgrade
 
 Optional flags:
+  --upgrade
   --version TAG
   --engine caddy|legacy
   --build-from-source
@@ -90,6 +93,10 @@ parse_args() {
         BUILD_FROM_SOURCE=1
         shift 1
         ;;
+      --upgrade)
+        UPGRADE_ONLY=1
+        shift 1
+        ;;
       --engine)
         ENGINE="${2:-}"
         shift 2
@@ -129,9 +136,13 @@ parse_args() {
     esac
   done
 
-  [[ -n "$API_HOST" ]] || fail "--api-host is required"
-  [[ -n "$NODE_ID" ]] || fail "--node-id is required"
-  [[ -n "$API_KEY" ]] || fail "--api-key is required"
+  if [[ "$UPGRADE_ONLY" -eq 1 ]]; then
+    [[ -f "$CONFIG_PATH" ]] || fail "--upgrade requires existing config: ${CONFIG_PATH}"
+  else
+    [[ -n "$API_HOST" ]] || fail "--api-host is required"
+    [[ -n "$NODE_ID" ]] || fail "--node-id is required"
+    [[ -n "$API_KEY" ]] || fail "--api-key is required"
+  fi
   case "$ENGINE" in
     caddy|legacy)
       ;;
@@ -410,11 +421,17 @@ main() {
   install_binary
   sync_repo
   install_caddy
-  write_config
+  if [[ "$UPGRADE_ONLY" -eq 0 ]]; then
+    write_config
+  fi
   write_service
   write_logrotate
   start_service
-  log "installed successfully"
+  if [[ "$UPGRADE_ONLY" -eq 1 ]]; then
+    log "upgraded successfully"
+  else
+    log "installed successfully"
+  fi
   log "config: ${CONFIG_PATH}"
   log "service: ${SERVICE_NAME}"
 }
