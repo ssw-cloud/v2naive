@@ -85,6 +85,20 @@ bash <(curl -fsSL https://raw.githubusercontent.com/ssw-cloud/v2naive/main/scrip
 
 `--upgrade` 会复用现有 `/etc/v2naive/config.yml`，只更新二进制、Caddy runtime、systemd 服务和 logrotate，不会重写节点 ID、面板地址或 API key。
 
+私有仓库安装/升级：
+
+```bash
+read -rsp "GitHub token: " V2NAIVE_GITHUB_TOKEN; echo
+export V2NAIVE_GITHUB_TOKEN
+bash <(curl -fsSL \
+  -H "Authorization: Bearer ${V2NAIVE_GITHUB_TOKEN}" \
+  -H "Accept: application/vnd.github.raw" \
+  "https://api.github.com/repos/ssw-cloud/v2naive/contents/script/install.sh?ref=main") --upgrade
+unset V2NAIVE_GITHUB_TOKEN
+```
+
+token 只需要对该私有仓库有只读权限。脚本会用同一个 `V2NAIVE_GITHUB_TOKEN` 下载私有 release 资产；只有 release 资产不可用或强制源码构建时才会拉取源码。
+
 当 `Engine=caddy` 时，安装脚本还会额外构建一个带本地统计补丁的 `forwardproxy@naive` 运行时：
 
 - 会优先下载 release 里的 `v2naive_caddy_linux_<arch>.tar.gz`

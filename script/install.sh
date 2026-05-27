@@ -24,6 +24,7 @@ ENGINE="${ENGINE:-caddy}"
 UPGRADE_ONLY=0
 UNINSTALL_ONLY=0
 PURGE=0
+GITHUB_AUTH_TOKEN="${V2NAIVE_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
 
 API_HOST=""
 NODE_ID=""
@@ -49,6 +50,9 @@ Optional flags:
   --config-path PATH
   --service-name NAME
   --go-version VERSION
+
+Private repository:
+  Set V2NAIVE_GITHUB_TOKEN to a GitHub token with repo read access.
 EOF
 }
 
@@ -69,6 +73,25 @@ version_ge() {
   local current="$1"
   local minimum="$2"
   [[ "$(printf '%s\n%s\n' "$minimum" "$current" | sort -V | head -n1)" == "$minimum" ]]
+}
+
+github_curl() {
+  local url="$1"
+  local output="$2"
+  local args=(-fL --connect-timeout 15 --retry 3)
+  if [[ -n "$GITHUB_AUTH_TOKEN" ]]; then
+    args+=(-H "Authorization: Bearer ${GITHUB_AUTH_TOKEN}")
+    args+=(-H "X-GitHub-Api-Version: 2022-11-28")
+  fi
+  curl "${args[@]}" "$url" -o "$output"
+}
+
+git_with_auth() {
+  if [[ -n "$GITHUB_AUTH_TOKEN" && "$REPO_URL" == https://github.com/* ]]; then
+    git -c "http.https://github.com/.extraheader=AUTHORIZATION: bearer ${GITHUB_AUTH_TOKEN}" "$@"
+    return
+  fi
+  git "$@"
 }
 
 parse_args() {
@@ -253,7 +276,7 @@ download_patched_caddy_release() {
   local archive="${workdir}/${asset_name}"
 
   log "downloading patched naive caddy package ${asset_name}"
-  if ! curl -fL --connect-timeout 15 --retry 3 "$url" -o "$archive"; then
+  if ! github_curl "$url" "$archive"; then
     rm -rf "$workdir"
     return 1
   fi
@@ -276,7 +299,7 @@ download_release_binary() {
   local archive="${workdir}/${asset_name}"
 
   log "downloading release package ${asset_name}"
-  if ! curl -fL --connect-timeout 15 --retry 3 "$url" -o "$archive"; then
+  if ! github_curl "$url" "$archive"; then
     rm -rf "$workdir"
     return 1
   fi
@@ -322,13 +345,13 @@ sync_repo() {
   mkdir -p "$INSTALL_DIR"
   if [[ -d "${SRC_DIR}/.git" ]]; then
     log "updating repository"
-    git -C "$SRC_DIR" fetch --tags origin
-    git -C "$SRC_DIR" checkout "$REPO_BRANCH"
-    git -C "$SRC_DIR" reset --hard "origin/${REPO_BRANCH}"
+    git_with_auth -C "$SRC_DIR" fetch --tags origin
+    git_with_auth -C "$SRC_DIR" checkout "$REPO_BRANCH"
+    git_with_auth -C "$SRC_DIR" reset --hard "origin/${REPO_BRANCH}"
   else
     rm -rf "$SRC_DIR"
     log "cloning repository"
-    git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$SRC_DIR"
+    git_with_auth clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$SRC_DIR"
   fi
 }
 
@@ -348,6 +371,7 @@ build_binary() {
 
 build_naive_caddy() {
   ensure_go
+  sync_repo
   local gopath
   gopath="$("$GO_BIN" env GOPATH)"
   [[ -d "${SRC_DIR}/runtime/forwardproxy" ]] || fail "missing local forwardproxy runtime sources"
@@ -468,7 +492,6 @@ main() {
   fi
   install_packages
   install_binary
-  sync_repo
   install_caddy
   if [[ "$UPGRADE_ONLY" -eq 0 ]]; then
     write_config
