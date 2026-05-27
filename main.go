@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sort"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -198,7 +201,7 @@ func (c *Controller) reportUserTrafficTask(ctx context.Context) error {
 			}
 			log.WithError(err).Info("report user traffic failed")
 		} else {
-			log.Infof("%s: reported %d users traffic", c.tag, len(userTraffic))
+			log.Debugf("%s: reported %d users traffic", c.tag, len(userTraffic))
 		}
 	}
 
@@ -259,6 +262,7 @@ func setupLog(cfg conf.LogConfig) error {
 		return err
 	}
 	log.SetLevel(level)
+	log.SetFormatter(compactFormatter{})
 	if cfg.Output != "" {
 		file, err := os.OpenFile(cfg.Output, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 		if err != nil {
@@ -267,6 +271,50 @@ func setupLog(cfg conf.LogConfig) error {
 		log.SetOutput(file)
 	}
 	return nil
+}
+
+type compactFormatter struct{}
+
+func (compactFormatter) Format(entry *log.Entry) ([]byte, error) {
+	var builder strings.Builder
+	builder.WriteString(entry.Time.Format("2006/01/02 15:04:05"))
+	builder.WriteByte(' ')
+	if strings.HasPrefix(entry.Message, "| ") {
+		builder.WriteString(entry.Message)
+		builder.WriteByte('\n')
+		return []byte(builder.String()), nil
+	}
+
+	builder.WriteByte('[')
+	builder.WriteString(strings.ToUpper(entry.Level.String()))
+	builder.WriteString("] ")
+	builder.WriteString(entry.Message)
+	if len(entry.Data) > 0 {
+		keys := make([]string, 0, len(entry.Data))
+		for key := range entry.Data {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			builder.WriteByte(' ')
+			builder.WriteString(key)
+			builder.WriteByte('=')
+			builder.WriteString(compactLogValue(entry.Data[key]))
+		}
+	}
+	builder.WriteByte('\n')
+	return []byte(builder.String()), nil
+}
+
+func compactLogValue(value interface{}) string {
+	text := fmt.Sprint(value)
+	if text == "" {
+		return strconv.Quote(text)
+	}
+	if strings.ContainsAny(text, " \t\r\n\"") {
+		return strconv.Quote(text)
+	}
+	return text
 }
 
 func main() {

@@ -1290,13 +1290,6 @@ func (s *Server) handleEventLine(raw string) {
 
 	switch event.Type {
 	case "open":
-		log.WithFields(log.Fields{
-			"node_id":   s.node.Id,
-			"user_id":   event.User,
-			"source_ip": event.IP,
-			"host":      event.Host,
-			"target":    event.Target,
-		}).Info("proxy connect opened")
 		s.statsMu.Lock()
 		if _, ok := s.online[event.User]; !ok {
 			s.online[event.User] = map[string]int{}
@@ -1304,16 +1297,8 @@ func (s *Server) handleEventLine(raw string) {
 		s.online[event.User][event.IP]++
 		s.statsMu.Unlock()
 	case "close":
-		log.WithFields(log.Fields{
-			"node_id":     s.node.Id,
-			"user_id":     event.User,
-			"source_ip":   event.IP,
-			"host":        event.Host,
-			"target":      event.Target,
-			"upload":      event.Upload,
-			"download":    event.Download,
-			"duration_ms": event.Duration,
-		}).Info("proxy connect closed")
+		user := s.userByUUID(event.User)
+		log.Info(s.formatAccessLog(event, user))
 		s.getCounter(event.User).add(event.Upload, event.Download)
 		s.limiter.ReleaseIP(event.User, event.IP)
 		s.statsMu.Lock()
@@ -1329,6 +1314,39 @@ func (s *Server) handleEventLine(raw string) {
 		}
 		s.statsMu.Unlock()
 	}
+}
+
+func (s *Server) formatAccessLog(event tunnelEvent, user panel.UserInfo) string {
+	source := event.IP
+	if source == "" {
+		source = "-"
+	}
+	host := event.Host
+	if host == "" {
+		host = event.Target
+	}
+	if host == "" {
+		host = "-"
+	}
+	target := event.Target
+	if target == "" {
+		target = host
+	}
+	userID := strconv.Itoa(user.Id)
+	if user.Id == 0 {
+		userID = "0"
+	}
+	return fmt.Sprintf(
+		"| node:%d | from %s |accepted| tcp:%s | target:%s | user_id:%s | upload:%d | download:%d | duration:%dms",
+		s.node.Id,
+		source,
+		host,
+		target,
+		userID,
+		event.Upload,
+		event.Download,
+		event.Duration,
+	)
 }
 
 func (s *Server) replaceUsers(users []panel.UserInfo) {

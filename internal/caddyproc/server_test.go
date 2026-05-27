@@ -1,6 +1,7 @@
 package caddyproc
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/ssw-cloud/v2naive/internal/conf"
 	panel "github.com/ssw-cloud/v2naive/internal/panel"
 )
@@ -187,6 +189,83 @@ func TestTunnelEventsAcceptHostAndDurationFields(t *testing.T) {
 	traffic := server.GetUserTrafficSlice(0)
 	if len(traffic) != 1 || traffic[0].Upload != 100 || traffic[0].Download != 200 {
 		t.Fatalf("unexpected traffic snapshot: %+v", traffic)
+	}
+}
+
+func TestTunnelCloseLogUsesNumericUserID(t *testing.T) {
+	server := New(&panel.NodeInfo{
+		Id:         5,
+		ServerPort: 443,
+		CertInfo: &panel.CertInfo{
+			CertFile: "/tmp/cert.pem",
+			KeyFile:  "/tmp/key.pem",
+		},
+	}, []panel.UserInfo{
+		{Id: 7, Uuid: "user-1"},
+	}, nil, conf.RuntimeConfig{
+		CaddyPath:     "/opt/v2naive/caddy",
+		WorkingDir:    "/var/lib/v2naive",
+		AdminPortBase: 22019,
+	})
+
+	var out bytes.Buffer
+	previousOutput := log.StandardLogger().Out
+	previousFormatter := log.StandardLogger().Formatter
+	defer func() {
+		log.SetOutput(previousOutput)
+		log.SetFormatter(previousFormatter)
+	}()
+	log.SetOutput(&out)
+	log.SetFormatter(&log.TextFormatter{DisableTimestamp: true, DisableQuote: true})
+
+	server.handleEventLine(`{"type":"open","user":"user-1","ip":"1.2.3.4","host":"github.com:443","target":"140.82.114.4:443"}`)
+	if out.Len() != 0 {
+		t.Fatalf("open event should not emit access log, got %q", out.String())
+	}
+
+	server.handleEventLine(`{"type":"close","user":"user-1","ip":"1.2.3.4","host":"github.com:443","target":"140.82.114.4:443","upload":100,"download":200,"duration_ms":3000}`)
+	text := out.String()
+	for _, needle := range []string{
+		"from 1.2.3.4",
+		"|accepted| tcp:github.com:443",
+		"target:140.82.114.4:443",
+		"user_id:7",
+		"upload:100",
+		"download:200",
+		"duration:3000ms",
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("expected access log to contain %q, got %q", needle, text)
+		}
+	}
+	if strings.Contains(text, "user_id:user-1") {
+		t.Fatalf("access log should not use uuid as user_id: %q", text)
+	}
+}
+
+func TestTunnelCloseLogUsesZeroForUnknownNumericUserID(t *testing.T) {
+	server := New(&panel.NodeInfo{
+		Id:         5,
+		ServerPort: 443,
+		CertInfo: &panel.CertInfo{
+			CertFile: "/tmp/cert.pem",
+			KeyFile:  "/tmp/key.pem",
+		},
+	}, nil, nil, conf.RuntimeConfig{
+		CaddyPath:     "/opt/v2naive/caddy",
+		WorkingDir:    "/var/lib/v2naive",
+		AdminPortBase: 22019,
+	})
+
+	text := server.formatAccessLog(tunnelEvent{
+		User:   "unknown-uuid",
+		IP:     "1.2.3.4",
+		Host:   "github.com:443",
+		Target: "140.82.114.4:443",
+	}, panel.UserInfo{})
+
+	if !strings.Contains(text, "user_id:0") || strings.Contains(text, "unknown-uuid") {
+		t.Fatalf("unknown users should not leak uuid in access log: %q", text)
 	}
 }
 
