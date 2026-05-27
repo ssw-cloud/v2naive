@@ -294,7 +294,11 @@ build_binary() {
   mkdir -p "$INSTALL_DIR"
   (
     cd "$SRC_DIR"
-    "$GO_BIN" build -o "$BIN_PATH" .
+    local version
+    local commit
+    version="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
+    commit="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+    "$GO_BIN" build -trimpath -ldflags="-s -w -X github.com/ssw-cloud/v2naive/internal/version.Version=${version} -X github.com/ssw-cloud/v2naive/internal/version.Commit=${commit}" -o "$BIN_PATH" .
   )
   chmod 0755 "$BIN_PATH"
 }

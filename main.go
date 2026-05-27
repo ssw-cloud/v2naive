@@ -19,6 +19,7 @@ import (
 	panel "github.com/ssw-cloud/v2naive/internal/panel"
 	"github.com/ssw-cloud/v2naive/internal/server"
 	"github.com/ssw-cloud/v2naive/internal/task"
+	"github.com/ssw-cloud/v2naive/internal/version"
 )
 
 type Controller struct {
@@ -319,7 +320,13 @@ func compactLogValue(value interface{}) string {
 
 func main() {
 	configPath := flag.String("config", "config.yml", "path to config file")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("v2naive %s commit %s\n", version.Version, version.Commit)
+		return
+	}
 
 	cfg := conf.New()
 	if err := cfg.LoadFromPath(*configPath); err != nil {
@@ -328,6 +335,10 @@ func main() {
 	if err := setupLog(cfg.LogConfig); err != nil {
 		log.Fatalf("setup log failed: %v", err)
 	}
+	log.WithFields(log.Fields{
+		"version": version.Version,
+		"commit":  version.Commit,
+	}).Info("v2naive starting")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

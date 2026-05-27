@@ -35,7 +35,9 @@ jobs:
           CGO_ENABLED: 0
         run: |
           mkdir -p "dist/${GOARCH}"
-          go build -trimpath -ldflags="-s -w" -o "dist/${GOARCH}/v2naive" .
+          VERSION="${GITHUB_REF_NAME}"
+          COMMIT="${GITHUB_SHA}"
+          go build -trimpath -ldflags="-s -w -X github.com/ssw-cloud/v2naive/internal/version.Version=${VERSION} -X github.com/ssw-cloud/v2naive/internal/version.Commit=${COMMIT}" -o "dist/${GOARCH}/v2naive" .
           cp README.md config.yml.example "dist/${GOARCH}/"
           mkdir -p "dist/${GOARCH}/deploy"
           cp deploy/v2naive.service "dist/${GOARCH}/deploy/"
