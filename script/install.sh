@@ -22,6 +22,8 @@ GO_BIN=""
 BUILD_FROM_SOURCE=0
 ENGINE="${ENGINE:-caddy}"
 UPGRADE_ONLY=0
+UNINSTALL_ONLY=0
+PURGE=0
 
 API_HOST=""
 NODE_ID=""
@@ -32,9 +34,12 @@ usage() {
 Usage:
   bash install.sh --api-host https://panel.example.com --node-id 1 --api-key your-token
   bash install.sh --upgrade
+  bash install.sh --uninstall
 
 Optional flags:
   --upgrade
+  --uninstall
+  --purge
   --version TAG
   --engine caddy|legacy
   --build-from-source
@@ -97,6 +102,14 @@ parse_args() {
         UPGRADE_ONLY=1
         shift 1
         ;;
+      --uninstall)
+        UNINSTALL_ONLY=1
+        shift 1
+        ;;
+      --purge)
+        PURGE=1
+        shift 1
+        ;;
       --engine)
         ENGINE="${2:-}"
         shift 2
@@ -136,6 +149,10 @@ parse_args() {
     esac
   done
 
+  if [[ "$UNINSTALL_ONLY" -eq 1 ]]; then
+    return
+  fi
+
   if [[ "$UPGRADE_ONLY" -eq 1 ]]; then
     [[ -f "$CONFIG_PATH" ]] || fail "--upgrade requires existing config: ${CONFIG_PATH}"
   else
@@ -150,6 +167,32 @@ parse_args() {
       fail "--engine must be caddy or legacy"
       ;;
   esac
+}
+
+uninstall_service() {
+  need_cmd systemctl
+  if systemctl list-unit-files "${SERVICE_NAME}.service" >/dev/null 2>&1 || [[ -f "$SERVICE_PATH" ]]; then
+    systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+  fi
+  rm -f "$SERVICE_PATH"
+  systemctl daemon-reload
+  systemctl reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
+}
+
+uninstall_v2naive() {
+  uninstall_service
+  rm -f "$LOGROTATE_PATH"
+  rm -rf "$INSTALL_DIR"
+
+  if [[ "$PURGE" -eq 1 ]]; then
+    rm -rf "$CONFIG_DIR" "$LOG_DIR" "$STATE_DIR"
+    log "uninstalled and purged v2naive"
+  else
+    log "uninstalled v2naive; kept config, logs and state"
+    log "kept config: ${CONFIG_DIR}"
+    log "kept logs: ${LOG_DIR}"
+    log "kept state: ${STATE_DIR}"
+  fi
 }
 
 ensure_root() {
@@ -419,6 +462,10 @@ start_service() {
 main() {
   parse_args "$@"
   ensure_root
+  if [[ "$UNINSTALL_ONLY" -eq 1 ]]; then
+    uninstall_v2naive
+    return
+  fi
   install_packages
   install_binary
   sync_repo
