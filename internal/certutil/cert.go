@@ -16,6 +16,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-acme/lego/v4/certcrypto"
@@ -27,7 +28,12 @@ import (
 	panel "github.com/ssw-cloud/v2naive/internal/panel"
 )
 
+var certLocks sync.Map
+
 func RequestCert(cert *panel.CertInfo) error {
+	unlock := lockCert(cert)
+	defer unlock()
+
 	switch cert.CertMode {
 	case "", "none":
 		if fileExists(cert.CertFile) && fileExists(cert.KeyFile) {
@@ -62,6 +68,28 @@ func RequestCert(cert *panel.CertInfo) error {
 	default:
 		return fmt.Errorf("unsupported cert mode: %s", cert.CertMode)
 	}
+}
+
+func lockCert(cert *panel.CertInfo) func() {
+	key := certLockKey(cert)
+	value, _ := certLocks.LoadOrStore(key, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+func certLockKey(cert *panel.CertInfo) string {
+	if cert == nil {
+		return "nil"
+	}
+	parts := []string{
+		cert.CertMode,
+		cert.CertDomain,
+		cert.CertFile,
+		cert.KeyFile,
+		cert.Provider,
+	}
+	return strings.Join(parts, "\x00")
 }
 
 func generateSelfSigned(domain, certPath, keyPath string) error {
@@ -165,6 +193,9 @@ func (l *Lego) CreateCert() error {
 }
 
 func (l *Lego) RenewCert() error {
+	unlock := lockCert(l.config)
+	defer unlock()
+
 	content, err := os.ReadFile(l.config.CertFile)
 	if err != nil {
 		return err
