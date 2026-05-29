@@ -74,6 +74,17 @@ bash <(curl -fsSL https://raw.githubusercontent.com/ssw-cloud/v2naive/main/scrip
   --api-key "your-server-token"
 ```
 
+同一台 VPS 部署多个节点 ID：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/ssw-cloud/v2naive/main/script/install.sh) \
+  --api-host "https://your-panel.example.com" \
+  --node-id 1,2,3 \
+  --api-key "your-server-token"
+```
+
+也可以重复传入 `--node-id`，例如 `--node-id 1 --node-id 2 --node-id 3`。脚本会在 `/etc/v2naive/config.yml` 里生成多条 `Nodes`，但这些节点在面板下发的服务端口不能互相冲突。
+
 默认会优先下载 GitHub Release 里的 Linux 二进制包，只有在找不到对应 release 时才会回退到源码编译。
 不指定 `--version` 时会自动使用 latest release。
 

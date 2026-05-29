@@ -27,13 +27,14 @@ PURGE=0
 GITHUB_AUTH_TOKEN="${V2NAIVE_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
 
 API_HOST=""
-NODE_ID=""
 API_KEY=""
+NODE_IDS=()
 
 usage() {
   cat <<'EOF'
 Usage:
   bash install.sh --api-host https://panel.example.com --node-id 1 --api-key your-token
+  bash install.sh --api-host https://panel.example.com --node-id 1,2,3 --api-key your-token
   bash install.sh --upgrade
   bash install.sh --uninstall
 
@@ -41,6 +42,8 @@ Optional flags:
   --upgrade
   --uninstall
   --purge
+  --node-id ID[,ID...]
+  --node-ids ID[,ID...]
   --version TAG
   --engine caddy|legacy
   --build-from-source
@@ -94,6 +97,54 @@ git_with_auth() {
   git "$@"
 }
 
+trim() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+node_id_exists() {
+  local candidate="$1"
+  local existing
+  for existing in "${NODE_IDS[@]:-}"; do
+    [[ -n "$existing" ]] || continue
+    if [[ "$existing" == "$candidate" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+add_node_ids() {
+  local raw="$1"
+  local item
+  local -a parts=()
+  IFS=',' read -r -a parts <<<"$raw"
+  for item in "${parts[@]}"; do
+    item="$(trim "$item")"
+    [[ -n "$item" ]] || continue
+    [[ "$item" =~ ^[0-9]+$ ]] || fail "invalid node id: ${item}"
+    [[ "$item" -gt 0 ]] || fail "invalid node id: ${item}"
+    if ! node_id_exists "$item"; then
+      NODE_IDS+=("$item")
+    fi
+  done
+}
+
+node_ids_csv() {
+  local joined=""
+  local node_id
+  for node_id in "${NODE_IDS[@]:-}"; do
+    [[ -n "$node_id" ]] || continue
+    if [[ -n "$joined" ]]; then
+      joined+=","
+    fi
+    joined+="$node_id"
+  done
+  printf '%s' "$joined"
+}
+
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -101,8 +152,8 @@ parse_args() {
         API_HOST="${2:-}"
         shift 2
         ;;
-      --node-id)
-        NODE_ID="${2:-}"
+      --node-id|--node-ids)
+        add_node_ids "${2:-}"
         shift 2
         ;;
       --api-key)
@@ -180,7 +231,7 @@ parse_args() {
     [[ -f "$CONFIG_PATH" ]] || fail "--upgrade requires existing config: ${CONFIG_PATH}"
   else
     [[ -n "$API_HOST" ]] || fail "--api-host is required"
-    [[ -n "$NODE_ID" ]] || fail "--node-id is required"
+    [[ "${#NODE_IDS[@]}" -gt 0 ]] || fail "--node-id is required"
     [[ -n "$API_KEY" ]] || fail "--api-key is required"
   fi
   case "$ENGINE" in
@@ -435,12 +486,18 @@ Runtime:
   AdminPortBase: 22019
 
 Nodes:
+EOF
+
+  local node_id
+  for node_id in "${NODE_IDS[@]}"; do
+    cat >>"$CONFIG_PATH" <<EOF
   - ApiHost: "${API_HOST}"
-    NodeID: ${NODE_ID}
+    NodeID: ${node_id}
     ApiKey: "${API_KEY}"
     Timeout: 15
     RetryCount: 2
 EOF
+  done
 }
 
 write_service() {
@@ -503,6 +560,7 @@ main() {
     log "upgraded successfully"
   else
     log "installed successfully"
+    log "node ids: $(node_ids_csv)"
   fi
   log "config: ${CONFIG_PATH}"
   log "service: ${SERVICE_NAME}"
