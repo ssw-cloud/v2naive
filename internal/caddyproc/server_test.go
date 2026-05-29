@@ -85,6 +85,34 @@ func TestRenderConfigLocksProxyWhenNoUsers(t *testing.T) {
 	}
 }
 
+func TestRenderConfigAddsPortToHostSiteAddresses(t *testing.T) {
+	server := New(&panel.NodeInfo{
+		Id:         9,
+		Host:       "jp.example.com",
+		ServerPort: 4443,
+		CertInfo: &panel.CertInfo{
+			CertFile: "/tmp/cert.pem",
+			KeyFile:  "/tmp/key.pem",
+		},
+		TLSSettings: panel.TlsSettings{
+			ServerName:  "jp.example.com",
+			ServerNames: []string{"jp.example.com", "edge.example.com"},
+		},
+	}, nil, nil, conf.RuntimeConfig{
+		CaddyPath:     "/opt/v2naive/caddy",
+		WorkingDir:    "/var/lib/v2naive",
+		AdminPortBase: 22019,
+	})
+
+	text := string(server.renderConfig())
+	if !strings.Contains(text, ":4443, jp.example.com:4443, edge.example.com:4443 {") {
+		t.Fatalf("expected host site addresses to include port 4443, got:\n%s", text)
+	}
+	if strings.Contains(text, ", jp.example.com,") || strings.Contains(text, ", edge.example.com {") {
+		t.Fatalf("expected bare host site addresses to be avoided, got:\n%s", text)
+	}
+}
+
 func TestWriteCoverSiteCreatesSSWEdgePages(t *testing.T) {
 	workDir := t.TempDir()
 	server := New(&panel.NodeInfo{

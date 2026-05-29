@@ -1080,6 +1080,7 @@ func collectHosts(node *panel.NodeInfo) []string {
 		if host == "" {
 			return
 		}
+		host = withSitePort(host, node.ServerPort)
 		if _, ok := set[host]; ok {
 			return
 		}
@@ -1092,6 +1093,22 @@ func collectHosts(node *panel.NodeInfo) []string {
 		appendHost(name)
 	}
 	return out
+}
+
+func withSitePort(host string, port int) string {
+	if port <= 0 || port == 443 || strings.HasPrefix(host, ":") {
+		return host
+	}
+	if strings.Contains(host, "://") {
+		return host
+	}
+	if _, _, err := net.SplitHostPort(host); err == nil {
+		return host
+	}
+	if strings.Count(host, ":") > 0 {
+		return "[" + strings.Trim(host, "[]") + "]:" + strconv.Itoa(port)
+	}
+	return host + ":" + strconv.Itoa(port)
 }
 
 func quote(v string) string {
