@@ -192,29 +192,29 @@ func (l *Lego) CreateCert() error {
 	return l.writeCert(resource)
 }
 
-func (l *Lego) RenewCert() error {
+func (l *Lego) RenewCert() (bool, error) {
 	unlock := lockCert(l.config)
 	defer unlock()
 
 	content, err := os.ReadFile(l.config.CertFile)
 	if err != nil {
-		return err
+		return false, err
 	}
 	cert, err := certcrypto.ParsePEMCertificate(content)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if int(time.Until(cert.NotAfter).Hours()/24.0) > 30 {
-		return nil
+		return false, nil
 	}
 	resource, err := l.client.Certificate.Renew(certificate.Resource{
 		Domain:      l.config.CertDomain,
 		Certificate: content,
 	}, true, false, "")
 	if err != nil {
-		return err
+		return false, err
 	}
-	return l.writeCert(resource)
+	return true, l.writeCert(resource)
 }
 
 func (l *Lego) writeCert(resource *certificate.Resource) error {

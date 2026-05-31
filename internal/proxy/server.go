@@ -70,7 +70,9 @@ func (s *Server) replaceUsers(users []panel.UserInfo) {
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()
 	for _, user := range users {
-		if _, ok := s.stats[user.Uuid]; !ok {
+		if stat, ok := s.stats[user.Uuid]; ok {
+			stat.setUID(user.Id)
+		} else {
 			s.stats[user.Uuid] = &trafficCounter{uid: user.Id}
 		}
 	}
@@ -139,7 +141,12 @@ func (s *Server) UpdateUsers(added, deleted, modified, full []panel.UserInfo) {
 	defer s.usersMu.Unlock()
 	for _, user := range deleted {
 		delete(s.users, user.Uuid)
-		delete(s.stats, user.Uuid)
+		if stat, ok := s.stats[user.Uuid]; ok {
+			stat.setUID(user.Id)
+			if !stat.hasPending() {
+				delete(s.stats, user.Uuid)
+			}
+		}
 	}
 	for _, user := range added {
 		s.users[user.Uuid] = user
@@ -150,14 +157,16 @@ func (s *Server) UpdateUsers(added, deleted, modified, full []panel.UserInfo) {
 	for _, user := range modified {
 		s.users[user.Uuid] = user
 		if stat, ok := s.stats[user.Uuid]; ok {
-			stat.uid = user.Id
+			stat.setUID(user.Id)
 		} else {
 			s.stats[user.Uuid] = &trafficCounter{uid: user.Id}
 		}
 	}
 	if full != nil {
 		for _, user := range full {
-			if _, ok := s.stats[user.Uuid]; !ok {
+			if stat, ok := s.stats[user.Uuid]; ok {
+				stat.setUID(user.Id)
+			} else {
 				s.stats[user.Uuid] = &trafficCounter{uid: user.Id}
 			}
 		}
@@ -369,6 +378,12 @@ func (t *trafficCounter) addDownload(n int64) {
 	t.mu.Unlock()
 }
 
+func (t *trafficCounter) setUID(uid int) {
+	t.mu.Lock()
+	t.uid = uid
+	t.mu.Unlock()
+}
+
 func (t *trafficCounter) snapshotIfAbove(minTraffic int) (panel.UserTraffic, bool) {
 	threshold := int64(minTraffic) * 1000
 	t.mu.Lock()
@@ -381,21 +396,102 @@ func (t *trafficCounter) snapshotIfAbove(minTraffic int) (panel.UserTraffic, boo
 		Upload:   t.up,
 		Download: t.down,
 	}
-	t.up = 0
-	t.down = 0
 	return data, true
+}
+
+func (t *trafficCounter) confirm(reported panel.UserTraffic) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.up = subtractReported(t.up, reported.Upload)
+	t.down = subtractReported(t.down, reported.Download)
+}
+
+func (t *trafficCounter) hasPending() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.up > 0 || t.down > 0
+}
+
+func (t *trafficCounter) currentUID() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.uid
+}
+
+func subtractReported(current, reported int64) int64 {
+	if reported <= 0 {
+		return current
+	}
+	if current <= reported {
+		return 0
+	}
+	return current - reported
 }
 
 func (s *Server) GetUserTrafficSlice(minTraffic int) []panel.UserTraffic {
 	s.statsMu.RLock()
 	defer s.statsMu.RUnlock()
 	traffic := make([]panel.UserTraffic, 0, len(s.stats))
-	for _, counter := range s.stats {
+	for uuid, counter := range s.stats {
 		if snapshot, ok := counter.snapshotIfAbove(minTraffic); ok {
+			snapshot.UUID = uuid
 			traffic = append(traffic, snapshot)
 		}
 	}
 	return traffic
+}
+
+func (s *Server) ConfirmUserTraffic(reported []panel.UserTraffic) {
+	if len(reported) == 0 {
+		return
+	}
+	byUUID, byUID := indexReportedTraffic(reported)
+	activeUsers := s.activeUserUUIDs()
+
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	for uuid, counter := range s.stats {
+		if traffic, ok := byUUID[uuid]; ok {
+			counter.confirm(traffic)
+		} else if traffic, ok := byUID[counter.currentUID()]; ok {
+			counter.confirm(traffic)
+		}
+		if _, active := activeUsers[uuid]; !active && !counter.hasPending() {
+			delete(s.stats, uuid)
+		}
+	}
+}
+
+func (s *Server) activeUserUUIDs() map[string]struct{} {
+	s.usersMu.RLock()
+	defer s.usersMu.RUnlock()
+	active := make(map[string]struct{}, len(s.users))
+	for uuid := range s.users {
+		active[uuid] = struct{}{}
+	}
+	return active
+}
+
+func indexReportedTraffic(reported []panel.UserTraffic) (map[string]panel.UserTraffic, map[int]panel.UserTraffic) {
+	byUUID := make(map[string]panel.UserTraffic, len(reported))
+	byUID := make(map[int]panel.UserTraffic, len(reported))
+	for _, traffic := range reported {
+		if traffic.UUID != "" {
+			merged := byUUID[traffic.UUID]
+			merged.UID = traffic.UID
+			merged.UUID = traffic.UUID
+			merged.Upload += traffic.Upload
+			merged.Download += traffic.Download
+			byUUID[traffic.UUID] = merged
+			continue
+		}
+		merged := byUID[traffic.UID]
+		merged.UID = traffic.UID
+		merged.Upload += traffic.Upload
+		merged.Download += traffic.Download
+		byUID[traffic.UID] = merged
+	}
+	return byUUID, byUID
 }
 
 func (s *Server) GetOnlineDevice() []panel.OnlineUser {

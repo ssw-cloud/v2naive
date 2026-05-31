@@ -198,8 +198,12 @@ func TestTunnelEventsUpdateOnlineAndTraffic(t *testing.T) {
 	if traffic[0].UID != 7 || traffic[0].Upload != 1234 || traffic[0].Download != 5678 {
 		t.Fatalf("unexpected traffic snapshot: %+v", traffic[0])
 	}
+	if next := server.GetUserTrafficSlice(0); len(next) != 1 {
+		t.Fatalf("expected counters to remain pending before confirm, got %+v", next)
+	}
+	server.ConfirmUserTraffic(traffic)
 	if next := server.GetUserTrafficSlice(0); len(next) != 0 {
-		t.Fatalf("expected counters to reset after snapshot, got %+v", next)
+		t.Fatalf("expected counters to reset after confirm, got %+v", next)
 	}
 }
 
@@ -339,6 +343,36 @@ func TestTrafficEventsKeepDeletedUserIDForAccounting(t *testing.T) {
 	}
 	if traffic[0].UID != 1136 || traffic[0].Upload != 110 || traffic[0].Download != 220 {
 		t.Fatalf("unexpected traffic snapshot: %+v", traffic[0])
+	}
+}
+
+func TestPendingTrafficSurvivesUserDeleteUntilConfirm(t *testing.T) {
+	server := New(&panel.NodeInfo{
+		Id:         5,
+		ServerPort: 443,
+		CertInfo: &panel.CertInfo{
+			CertFile: "/tmp/cert.pem",
+			KeyFile:  "/tmp/key.pem",
+		},
+	}, []panel.UserInfo{
+		{Id: 7, Uuid: "user-1"},
+	}, nil, conf.RuntimeConfig{
+		CaddyPath:     "/opt/v2naive/caddy",
+		WorkingDir:    "/var/lib/v2naive",
+		AdminPortBase: 22019,
+	})
+
+	server.handleEventLine(`{"type":"traffic","user":"user-1","user_id":7,"ip":"1.2.3.4","host":"github.com:443","target":"140.82.114.4:443","upload":100,"download":200}`)
+	server.UpdateUsers(nil, []panel.UserInfo{{Id: 7, Uuid: "user-1"}}, nil, nil)
+
+	traffic := server.GetUserTrafficSlice(0)
+	if len(traffic) != 1 || traffic[0].UID != 7 || traffic[0].Upload != 100 || traffic[0].Download != 200 {
+		t.Fatalf("pending traffic was not preserved after delete: %+v", traffic)
+	}
+
+	server.ConfirmUserTraffic(traffic)
+	if next := server.GetUserTrafficSlice(0); len(next) != 0 {
+		t.Fatalf("expected deleted user's traffic to clear after confirm, got %+v", next)
 	}
 }
 

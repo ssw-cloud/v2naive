@@ -52,3 +52,29 @@ func TestGetNodeInfoUsesDefaultCertPaths(t *testing.T) {
 		t.Fatalf("expected default key file %q, got %q", DefaultKeyFile, info.CertInfo.KeyFile)
 	}
 }
+
+func TestReportUserTrafficReturnsStatusError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/server/UniProxy/push" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	client, err := New(&conf.NodeConfig{
+		APIHost: server.URL,
+		NodeID:  117,
+		Key:     "token",
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	err = client.ReportUserTraffic(context.Background(), []UserTraffic{
+		{UID: 7, Upload: 100, Download: 200},
+	})
+	if err == nil {
+		t.Fatal("expected report status error")
+	}
+}

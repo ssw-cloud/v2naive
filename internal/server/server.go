@@ -8,5 +8,6 @@ type Server interface {
 	SetAliveList(alive map[int]int)
 	UpdateUsers(added, deleted, modified, full []panel.UserInfo)
 	GetUserTrafficSlice(reportMin int) []panel.UserTraffic
+	ConfirmUserTraffic(reported []panel.UserTraffic)
 	GetOnlineDevice() []panel.OnlineUser
 }

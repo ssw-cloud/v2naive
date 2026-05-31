@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -157,6 +158,7 @@ type UserTraffic struct {
 	UID      int
 	Upload   int64
 	Download int64
+	UUID     string `json:"-"`
 }
 
 type OnlineUser struct {
@@ -213,6 +215,9 @@ func (c *Client) GetNodeInfo(ctx context.Context) (*NodeInfo, error) {
 	if resp.StatusCode() == 304 {
 		return nil, nil
 	}
+	if err := checkResponseStatus(resp); err != nil {
+		return nil, err
+	}
 
 	hash := sha256.Sum256(resp.Body())
 	newBodyHash := hex.EncodeToString(hash[:])
@@ -226,14 +231,34 @@ func (c *Client) GetNodeInfo(ctx context.Context) (*NodeInfo, error) {
 	if err := json.Unmarshal(resp.Body(), &cfg); err != nil {
 		return nil, fmt.Errorf("decode node params error: %w", err)
 	}
-	if cfg.Protocol != "naive" {
-		return nil, fmt.Errorf("unsupported protocol: %s", cfg.Protocol)
+	if err := cfg.Normalize(c.NodeID, c.APIHost); err != nil {
+		return nil, err
 	}
-	cfg.Id = c.NodeID
-	cfg.Tag = fmt.Sprintf("[%s]-naive:%d", c.APIHost, c.NodeID)
-	cfg.PushInterval = time.Duration(cfg.BaseConfig.PushInterval) * time.Second
-	cfg.PullInterval = time.Duration(cfg.BaseConfig.PullInterval) * time.Second
 
+	return &cfg, nil
+}
+
+func (cfg *NodeInfo) Normalize(nodeID int, apiHost string) error {
+	if cfg.Protocol != "naive" {
+		return fmt.Errorf("unsupported protocol: %s", cfg.Protocol)
+	}
+	cfg.Id = nodeID
+	cfg.Tag = fmt.Sprintf("[%s]-naive:%d", apiHost, nodeID)
+	if cfg.BaseConfig.PushInterval > 0 {
+		cfg.PushInterval = time.Duration(cfg.BaseConfig.PushInterval) * time.Second
+	} else if cfg.PushInterval <= 0 {
+		cfg.PushInterval = time.Minute
+	}
+	if cfg.BaseConfig.PullInterval > 0 {
+		cfg.PullInterval = time.Duration(cfg.BaseConfig.PullInterval) * time.Second
+	} else if cfg.PullInterval <= 0 {
+		cfg.PullInterval = time.Minute
+	}
+	cfg.CertInfo = cfg.buildCertInfo()
+	return nil
+}
+
+func (cfg *NodeInfo) buildCertInfo() *CertInfo {
 	certFile := cfg.TLSSettings.CertFile
 	keyFile := cfg.TLSSettings.KeyFile
 	if certFile == "" {
@@ -256,7 +281,7 @@ func (c *Client) GetNodeInfo(ctx context.Context) (*NodeInfo, error) {
 	if certDomain == "" {
 		certDomain = cfg.Host
 	}
-	cfg.CertInfo = &CertInfo{
+	return &CertInfo{
 		CertMode:         cfg.TLSSettings.CertMode,
 		CertFile:         certFile,
 		KeyFile:          keyFile,
@@ -266,8 +291,6 @@ func (c *Client) GetNodeInfo(ctx context.Context) (*NodeInfo, error) {
 		Provider:         cfg.TLSSettings.Provider,
 		RejectUnknownSni: cfg.TLSSettings.RejectUnknownSni == 1,
 	}
-
-	return &cfg, nil
 }
 
 func (t TlsSettings) EffectiveServerNames() []string {
@@ -306,6 +329,9 @@ func (c *Client) GetUserList(ctx context.Context) ([]UserInfo, error) {
 
 	if resp.StatusCode() == 304 {
 		return nil, nil
+	}
+	if err := checkResponseStatus(resp); err != nil {
+		return nil, err
 	}
 
 	userList := &UserListBody{}
@@ -350,23 +376,70 @@ func (c *Client) GetUserAlive(ctx context.Context) (map[int]int, error) {
 func (c *Client) ReportUserTraffic(ctx context.Context, userTraffic []UserTraffic) error {
 	data := make(map[int][]int64, len(userTraffic))
 	for _, traffic := range userTraffic {
-		data[traffic.UID] = []int64{traffic.Upload, traffic.Download}
+		current := data[traffic.UID]
+		if len(current) == 0 {
+			current = []int64{0, 0}
+		}
+		current[0] += traffic.Upload
+		current[1] += traffic.Download
+		data[traffic.UID] = current
 	}
 	const path = "/api/v1/server/UniProxy/push"
-	_, err := c.client.R().
+	resp, err := c.client.R().
 		SetContext(ctx).
 		SetBody(data).
 		ForceContentType("application/json").
 		Post(path)
-	return err
+	if err != nil {
+		return err
+	}
+	return checkResponseStatus(resp)
 }
 
 func (c *Client) ReportNodeOnlineUsers(ctx context.Context, data map[int][]string) error {
 	const path = "/api/v1/server/UniProxy/alive"
-	_, err := c.client.R().
+	resp, err := c.client.R().
 		SetContext(ctx).
 		SetBody(data).
 		ForceContentType("application/json").
 		Post(path)
-	return err
+	if err != nil {
+		return err
+	}
+	return checkResponseStatus(resp)
+}
+
+func checkResponseStatus(resp *resty.Response) error {
+	if resp == nil {
+		return fmt.Errorf("received nil response")
+	}
+	if resp.StatusCode() < 400 {
+		return nil
+	}
+	return &StatusError{
+		StatusCode: resp.StatusCode(),
+		Body:       shortResponseBody(resp.Body()),
+	}
+}
+
+type StatusError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("panel request failed: status=%d body=%s", e.StatusCode, e.Body)
+}
+
+func IsAuthStatusError(err error) bool {
+	var statusErr *StatusError
+	return errors.As(err, &statusErr) && (statusErr.StatusCode == http.StatusUnauthorized || statusErr.StatusCode == http.StatusForbidden)
+}
+
+func shortResponseBody(body []byte) string {
+	text := strings.TrimSpace(string(body))
+	if len(text) > 256 {
+		return text[:256]
+	}
+	return text
 }

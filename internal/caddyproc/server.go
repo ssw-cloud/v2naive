@@ -188,12 +188,66 @@ func (s *Server) GetUserTrafficSlice(minTraffic int) []panel.UserTraffic {
 	s.statsMu.RLock()
 	defer s.statsMu.RUnlock()
 	traffic := make([]panel.UserTraffic, 0, len(s.stats))
-	for _, counter := range s.stats {
+	for uuid, counter := range s.stats {
 		if snapshot, ok := counter.snapshotIfAbove(minTraffic); ok {
+			snapshot.UUID = uuid
 			traffic = append(traffic, snapshot)
 		}
 	}
 	return traffic
+}
+
+func (s *Server) ConfirmUserTraffic(reported []panel.UserTraffic) {
+	if len(reported) == 0 {
+		return
+	}
+	byUUID, byUID := indexReportedTraffic(reported)
+	activeUsers := s.activeUserUUIDs()
+
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	for uuid, counter := range s.stats {
+		if traffic, ok := byUUID[uuid]; ok {
+			counter.confirm(traffic)
+		} else if traffic, ok := byUID[counter.currentUID()]; ok {
+			counter.confirm(traffic)
+		}
+		if _, active := activeUsers[uuid]; !active && !counter.hasPending() {
+			delete(s.stats, uuid)
+		}
+	}
+}
+
+func (s *Server) activeUserUUIDs() map[string]struct{} {
+	s.usersMu.RLock()
+	defer s.usersMu.RUnlock()
+	active := make(map[string]struct{}, len(s.users))
+	for uuid := range s.users {
+		active[uuid] = struct{}{}
+	}
+	return active
+}
+
+func indexReportedTraffic(reported []panel.UserTraffic) (map[string]panel.UserTraffic, map[int]panel.UserTraffic) {
+	byUUID := make(map[string]panel.UserTraffic, len(reported))
+	byUID := make(map[int]panel.UserTraffic, len(reported))
+	for _, traffic := range reported {
+		if traffic.UUID != "" {
+			merged := byUUID[traffic.UUID]
+			merged.UID = traffic.UID
+			merged.UUID = traffic.UUID
+			merged.Upload += traffic.Upload
+			merged.Download += traffic.Download
+			byUUID[traffic.UUID] = merged
+			continue
+		}
+		merged := byUID[traffic.UID]
+		merged.UID = traffic.UID
+		merged.Upload += traffic.Upload
+		merged.Download += traffic.Download
+		byUID[traffic.UID] = merged
+	}
+	return byUUID, byUID
 }
 
 func (s *Server) GetOnlineDevice() []panel.OnlineUser {
@@ -1110,9 +1164,7 @@ func (t *trafficCounter) setUID(uid int) {
 		return
 	}
 	t.mu.Lock()
-	if t.uid == 0 {
-		t.uid = uid
-	}
+	t.uid = uid
 	t.mu.Unlock()
 }
 
@@ -1128,9 +1180,36 @@ func (t *trafficCounter) snapshotIfAbove(minTraffic int) (panel.UserTraffic, boo
 		Upload:   t.up,
 		Download: t.down,
 	}
-	t.up = 0
-	t.down = 0
 	return data, true
+}
+
+func (t *trafficCounter) confirm(reported panel.UserTraffic) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.up = subtractReported(t.up, reported.Upload)
+	t.down = subtractReported(t.down, reported.Download)
+}
+
+func (t *trafficCounter) hasPending() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.up > 0 || t.down > 0
+}
+
+func (t *trafficCounter) currentUID() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.uid
+}
+
+func subtractReported(current, reported int64) int64 {
+	if reported <= 0 {
+		return current
+	}
+	if current <= reported {
+		return 0
+	}
+	return current - reported
 }
 
 type tunnelEvent struct {
@@ -1410,7 +1489,9 @@ func (s *Server) replaceUsers(users []panel.UserInfo) {
 	defer s.statsMu.Unlock()
 	for uuid := range s.stats {
 		if _, ok := nextUsers[uuid]; !ok {
-			delete(s.stats, uuid)
+			if !s.stats[uuid].hasPending() {
+				delete(s.stats, uuid)
+			}
 		}
 	}
 	for uuid := range s.online {
@@ -1422,7 +1503,7 @@ func (s *Server) replaceUsers(users []panel.UserInfo) {
 		if _, ok := s.stats[user.Uuid]; !ok {
 			s.stats[user.Uuid] = &trafficCounter{uid: user.Id}
 		} else {
-			s.stats[user.Uuid].uid = user.Id
+			s.stats[user.Uuid].setUID(user.Id)
 		}
 	}
 }
@@ -1435,7 +1516,12 @@ func (s *Server) applyUserDelta(added, deleted, modified []panel.UserInfo) {
 
 	for _, user := range deleted {
 		delete(s.users, user.Uuid)
-		delete(s.stats, user.Uuid)
+		if stat, ok := s.stats[user.Uuid]; ok {
+			stat.setUID(user.Id)
+			if !stat.hasPending() {
+				delete(s.stats, user.Uuid)
+			}
+		}
 		delete(s.online, user.Uuid)
 	}
 	for _, user := range added {
@@ -1453,7 +1539,7 @@ func (s *Server) applyUserDelta(added, deleted, modified []panel.UserInfo) {
 			s.userIDs[user.Uuid] = user.Id
 		}
 		if stat, ok := s.stats[user.Uuid]; ok {
-			stat.uid = user.Id
+			stat.setUID(user.Id)
 		} else {
 			s.stats[user.Uuid] = &trafficCounter{uid: user.Id}
 		}

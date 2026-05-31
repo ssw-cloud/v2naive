@@ -1,11 +1,15 @@
 package main
 
 import (
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	log "github.com/sirupsen/logrus"
+	"github.com/ssw-cloud/v2naive/internal/conf"
+	panel "github.com/ssw-cloud/v2naive/internal/panel"
 )
 
 func TestCompactFormatterKeepsAccessLogReadable(t *testing.T) {
@@ -62,5 +66,59 @@ func TestCompactFormatterShowsVersionFields(t *testing.T) {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("expected %q in %q", needle, text)
 		}
+	}
+}
+
+func TestPanelSnapshotCacheRoundTrip(t *testing.T) {
+	controller := &Controller{
+		apiClient: &panel.Client{APIHost: "https://panel.example"},
+		conf:      &conf.NodeConfig{APIHost: "https://panel.example", NodeID: 42},
+		runtime:   conf.RuntimeConfig{WorkingDir: t.TempDir()},
+	}
+
+	err := controller.savePanelSnapshot(&panelSnapshot{
+		Node: &panel.NodeInfo{
+			Protocol: "naive",
+			Host:     "edge.example",
+			TLSSettings: panel.TlsSettings{
+				CertMode: "file",
+				CertFile: "/tmp/fullchain.pem",
+				KeyFile:  "/tmp/key.pem",
+			},
+			BaseConfig: panel.BaseConfig{
+				PushInterval: 15,
+				PullInterval: 30,
+			},
+		},
+		Users: []panel.UserInfo{{Id: 7, Uuid: "user-1"}},
+		Alive: map[int]int{7: 1},
+	})
+	if err != nil {
+		t.Fatalf("save panel snapshot failed: %v", err)
+	}
+
+	info, err := os.Stat(controller.panelSnapshotPath())
+	if err != nil {
+		t.Fatalf("stat cache failed: %v", err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("expected cache mode 0600, got %o", info.Mode().Perm())
+	}
+
+	loaded, err := controller.readPanelSnapshot()
+	if err != nil {
+		t.Fatalf("read panel snapshot failed: %v", err)
+	}
+	if loaded.Node.Id != 42 || loaded.Node.Tag != "[https://panel.example]-naive:42" {
+		t.Fatalf("unexpected cached node identity: %+v", loaded.Node)
+	}
+	if loaded.Node.PushInterval != 15*time.Second || loaded.Node.PullInterval != 30*time.Second {
+		t.Fatalf("unexpected cached intervals: push=%s pull=%s", loaded.Node.PushInterval, loaded.Node.PullInterval)
+	}
+	if loaded.Node.CertInfo == nil || loaded.Node.CertInfo.CertFile != "/tmp/fullchain.pem" || loaded.Node.CertInfo.KeyFile != "/tmp/key.pem" {
+		t.Fatalf("unexpected cached cert info: %+v", loaded.Node.CertInfo)
+	}
+	if len(loaded.Users) != 1 || loaded.Users[0].Id != 7 || loaded.Alive[7] != 1 {
+		t.Fatalf("unexpected cached users/alive: users=%+v alive=%+v", loaded.Users, loaded.Alive)
 	}
 }
