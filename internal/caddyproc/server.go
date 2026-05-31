@@ -182,31 +182,6 @@ func (s *Server) UpdateUsers(added, deleted, modified, full []panel.UserInfo) {
 		s.applyUserDelta(added, deleted, modified)
 	}
 	s.limiter.UpdateUsers(added, deleted, modified)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.cmd == nil {
-		return
-	}
-	if err := s.writeCoverSite(); err != nil {
-		log.WithError(err).Error("write cover site failed")
-		return
-	}
-	if err := os.WriteFile(s.configPath, s.renderConfig(), 0644); err != nil {
-		log.WithError(err).Error("rewrite caddyfile failed")
-		return
-	}
-	reloadCmd := exec.Command(s.runtime.CaddyPath, "reload", "--config", s.configPath, "--adapter", "caddyfile", "--address", "http://"+s.adminAddr)
-	reloadCmd.Dir = s.workDir
-	output, err := reloadCmd.CombinedOutput()
-	if err != nil {
-		log.WithFields(log.Fields{
-			"err":    err,
-			"output": string(output),
-		}).Error("reload caddy failed")
-		return
-	}
-	log.WithField("node_id", s.node.Id).Info("reloaded naive caddy runtime")
 }
 
 func (s *Server) GetUserTrafficSlice(minTraffic int) []panel.UserTraffic {
@@ -1503,16 +1478,6 @@ func (s *Server) getCounterWithUID(uuid string, uid int) *trafficCounter {
 	counter = &trafficCounter{uid: uid}
 	s.stats[uuid] = counter
 	return counter
-}
-
-func (s *Server) userSnapshot() []panel.UserInfo {
-	s.usersMu.RLock()
-	defer s.usersMu.RUnlock()
-	users := make([]panel.UserInfo, 0, len(s.users))
-	for _, user := range s.users {
-		users = append(users, user)
-	}
-	return users
 }
 
 func (s *Server) userByUUID(uuid string) panel.UserInfo {
