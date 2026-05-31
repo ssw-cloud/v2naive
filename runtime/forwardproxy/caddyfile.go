@@ -58,6 +58,13 @@ func (h *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 			}
 			h.AuthCredentials = append(h.AuthCredentials, EncodeAuthCredentials(args[0], args[1]))
 
+		case "v2naive_auth":
+			args := d.RemainingArgs()
+			if len(args) != 0 {
+				return d.ArgErr()
+			}
+			h.V2NaiveAuth = true
+
 		case "hosts":
 			args := d.RemainingArgs()
 			if len(args) == 0 {

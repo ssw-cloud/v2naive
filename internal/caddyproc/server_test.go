@@ -47,8 +47,7 @@ func TestRenderConfigIncludesNaiveForwardProxyShape(t *testing.T) {
 		":443, us.sswnat.com, naive.example.com {",
 		"bind 0.0.0.0",
 		"tls \"/etc/v2naive/fullchain.cer\" \"/etc/v2naive/cert.key\"",
-		"basic_auth \"user-a\" \"user-a\"",
-		"basic_auth \"user-b\" \"user-b\"",
+		"v2naive_auth",
 		"probe_resistance",
 		"hide_ip",
 		"hide_via",
@@ -63,9 +62,12 @@ func TestRenderConfigIncludesNaiveForwardProxyShape(t *testing.T) {
 			t.Fatalf("expected config to contain %q, got:\n%s", needle, text)
 		}
 	}
+	if strings.Contains(text, "basic_auth") || strings.Contains(text, "user-a") || strings.Contains(text, "user-b") {
+		t.Fatalf("expected config to avoid per-user basic_auth entries, got:\n%s", text)
+	}
 }
 
-func TestRenderConfigLocksProxyWhenNoUsers(t *testing.T) {
+func TestRenderConfigUsesLocalAuthWhenNoUsers(t *testing.T) {
 	server := New(&panel.NodeInfo{
 		Id:         1,
 		ServerPort: 443,
@@ -80,8 +82,11 @@ func TestRenderConfigLocksProxyWhenNoUsers(t *testing.T) {
 	})
 
 	text := string(server.renderConfig())
-	if !strings.Contains(text, "basic_auth \"__disabled__\" \"__disabled__\"") {
-		t.Fatalf("expected placeholder auth when user list is empty, got:\n%s", text)
+	if !strings.Contains(text, "v2naive_auth") {
+		t.Fatalf("expected v2naive_auth when user list is empty, got:\n%s", text)
+	}
+	if strings.Contains(text, "basic_auth") {
+		t.Fatalf("expected no basic_auth entries when user list is empty, got:\n%s", text)
 	}
 }
 

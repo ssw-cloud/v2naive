@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -293,16 +292,7 @@ func (s *Server) renderConfig() []byte {
 	}
 	buf.WriteString("  tls " + quote(s.node.CertInfo.CertFile) + " " + quote(s.node.CertInfo.KeyFile) + "\n")
 	buf.WriteString("  forward_proxy {\n")
-	users := s.userSnapshot()
-	sort.Slice(users, func(i, j int) bool {
-		return users[i].Uuid < users[j].Uuid
-	})
-	if len(users) == 0 {
-		buf.WriteString("    basic_auth " + quote("__disabled__") + " " + quote("__disabled__") + "\n")
-	}
-	for _, user := range users {
-		buf.WriteString("    basic_auth " + quote(user.Uuid) + " " + quote(user.Uuid) + "\n")
-	}
+	buf.WriteString("    v2naive_auth\n")
 	buf.WriteString("    probe_resistance\n")
 	buf.WriteString("    hide_ip\n")
 	buf.WriteString("    hide_via\n")

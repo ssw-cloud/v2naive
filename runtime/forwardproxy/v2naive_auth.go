@@ -25,6 +25,24 @@ type v2naiveAuthResponse struct {
 	UserID     int `json:"user_id"`
 }
 
+type v2naiveAuthError struct {
+	StatusCode int
+	Reason     string `json:"reason"`
+	UserID     int    `json:"user_id"`
+}
+
+func (e v2naiveAuthError) Error() string {
+	if e.Reason != "" {
+		return fmt.Sprintf("auth status %d: %s", e.StatusCode, e.Reason)
+	}
+	return fmt.Sprintf("auth status %d", e.StatusCode)
+}
+
+func isV2NaiveUnauthorized(err error) bool {
+	authErr, ok := err.(v2naiveAuthError)
+	return ok && authErr.Reason == "unauthorized"
+}
+
 func authorizeV2naiveUser(user, ip, host, target string) (v2naiveAuthResponse, error) {
 	authURL := os.Getenv("V2NAIVE_AUTH_URL")
 	if authURL == "" || user == "" || ip == "" {
@@ -53,7 +71,10 @@ func authorizeV2naiveUser(user, ip, host, target string) (v2naiveAuthResponse, e
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return v2naiveAuthResponse{}, fmt.Errorf("auth status %d", resp.StatusCode)
+		authErr := v2naiveAuthError{StatusCode: resp.StatusCode}
+		_ = json.NewDecoder(resp.Body).Decode(&authErr)
+		authErr.StatusCode = resp.StatusCode
+		return v2naiveAuthResponse{}, authErr
 	}
 
 	var authResp v2naiveAuthResponse

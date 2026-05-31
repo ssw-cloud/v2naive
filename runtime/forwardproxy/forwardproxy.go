@@ -108,6 +108,10 @@ type Handler struct {
 
 	// TODO: temporary/deprecated - we should try to reuse existing authentication modules instead!
 	AuthCredentials [][]byte `json:"auth_credentials,omitempty"` // slice with base64-encoded credentials
+
+	// V2NaiveAuth accepts v2board UUID credentials and defers user existence
+	// checks to v2naive's local authorization endpoint.
+	V2NaiveAuth bool `json:"v2naive_auth,omitempty"`
 }
 
 // CaddyModule returns the Caddy module information.
@@ -171,7 +175,7 @@ func (h *Handler) Provision(ctx caddy.Context) error {
 	h.aclRules = append(h.aclRules, &aclAllRule{allow: true})
 
 	if h.ProbeResistance != nil {
-		if h.AuthCredentials == nil {
+		if !h.hasAuthentication() {
 			return fmt.Errorf("probe resistance requires authentication")
 		}
 		if len(h.ProbeResistance.Domain) > 0 {
@@ -262,6 +266,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 	var authErr error
 	if h.AuthCredentials != nil {
 		authErr = h.checkCredentials(r)
+	} else if h.V2NaiveAuth {
+		authErr = h.checkV2NaiveCredentials(r)
 	}
 	if h.ProbeResistance != nil && len(h.ProbeResistance.Domain) > 0 && reqHost == h.ProbeResistance.Domain {
 		return serveHiddenPage(w, authErr)
@@ -289,6 +295,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 			fmt.Errorf("unsupported HTTP major version: %d", r.ProtoMajor))
 	}
 
+	clientIP := remoteIPOnly(r.RemoteAddr)
+	requestedHostPort := targetHostPort(r)
+	proxyUserID := ""
+	authResult := v2naiveAuthResponse{}
+	if h.hasAuthentication() {
+		repl := r.Context().Value(caddy.ReplacerCtxKey).(*caddy.Replacer)
+		proxyUserID, _ = repl.GetString("http.auth.user.id")
+		authResult, err = authorizeV2naiveUser(proxyUserID, clientIP, requestedHostPort, requestedHostPort)
+		if err != nil {
+			if isV2NaiveUnauthorized(err) {
+				if h.ProbeResistance != nil {
+					return next.ServeHTTP(w, r)
+				}
+				w.Header().Set("Proxy-Authenticate", "Basic realm=\"Caddy Secure Web Proxy\"")
+				return caddyhttp.Error(http.StatusProxyAuthRequired, err)
+			}
+			return caddyhttp.Error(http.StatusForbidden, fmt.Errorf("device limit reached"))
+		}
+	}
+
 	ctx := context.Background()
 	if !h.HideIP {
 		ctxHeader := make(http.Header)
@@ -302,17 +328,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 	}
 
 	if r.Method == http.MethodConnect {
-		repl := r.Context().Value(caddy.ReplacerCtxKey).(*caddy.Replacer)
-		userID, _ := repl.GetString("http.auth.user.id")
-		clientIP := remoteIPOnly(r.RemoteAddr)
-		requestedHostPort := r.URL.Host
-		if requestedHostPort == "" {
-			requestedHostPort = r.Host
-		}
-		authResult, err := authorizeV2naiveUser(userID, clientIP, requestedHostPort, requestedHostPort)
-		if err != nil {
-			return caddyhttp.Error(http.StatusForbidden, fmt.Errorf("device limit reached"))
-		}
+		userID := proxyUserID
 		userLimiter := getUserRateLimiter(userID, authResult.SpeedLimit)
 		releaseOnFailure := true
 		defer func() {
@@ -498,6 +514,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 	return forwardResponse(w, response)
 }
 
+func targetHostPort(r *http.Request) string {
+	if r.URL != nil && r.URL.Host != "" {
+		return r.URL.Host
+	}
+	return r.Host
+}
+
+func (h Handler) hasAuthentication() bool {
+	return h.AuthCredentials != nil || h.V2NaiveAuth
+}
+
 func (h Handler) checkCredentials(r *http.Request) error {
 	pa := strings.Split(r.Header.Get("Proxy-Authorization"), " ")
 	if len(pa) != 2 {
@@ -538,6 +565,42 @@ func (h Handler) checkCredentials(r *http.Request) error {
 		repl.Set("http.auth.user.id", "invalid::")
 	}
 	return errors.New("invalid credentials")
+}
+
+func (h Handler) checkV2NaiveCredentials(r *http.Request) error {
+	pa := strings.Split(r.Header.Get("Proxy-Authorization"), " ")
+	if len(pa) != 2 {
+		return errors.New("Proxy-Authorization is required! Expected format: <type> <credentials>")
+	}
+	if strings.ToLower(pa[0]) != "basic" {
+		return errors.New("auth type is not supported")
+	}
+
+	repl := r.Context().Value(caddy.ReplacerCtxKey).(*caddy.Replacer)
+	buf := make([]byte, base64.StdEncoding.DecodedLen(len([]byte(pa[1]))))
+	n, err := base64.StdEncoding.Decode(buf, []byte(pa[1]))
+	if err != nil {
+		repl.Set("http.auth.user.id", "invalidbase64:"+err.Error())
+		return err
+	}
+	if !utf8.Valid(buf[:n]) {
+		repl.Set("http.auth.user.id", "invalid::")
+		return errors.New("invalid credentials")
+	}
+	cred := string(buf[:n])
+	i := strings.IndexByte(cred, ':')
+	if i < 0 {
+		repl.Set("http.auth.user.id", "invalidformat:"+cred)
+		return errors.New("invalid credentials")
+	}
+	user := cred[:i]
+	pass := cred[i+1:]
+	if user == "" || user != pass {
+		repl.Set("http.auth.user.id", "invalid:"+user)
+		return errors.New("invalid credentials")
+	}
+	repl.Set("http.auth.user.id", user)
+	return nil
 }
 
 func (h Handler) shouldServePACFile(r *http.Request) bool {
